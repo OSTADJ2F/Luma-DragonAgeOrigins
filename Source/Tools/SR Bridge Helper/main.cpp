@@ -29,7 +29,6 @@ namespace
       int hdr = 1, inverted_depth = 0, mvs_jittered = 0, auto_exposure = 0, dynamic_resolution = 0;
       float mvs_x_scale = 1.f, mvs_y_scale = 1.f;
       int render_preset = 0;
-      int prefer_fsr3 = 0;
 
       SR::SettingsData ToSr() const
       {
@@ -45,7 +44,6 @@ namespace
             .mvs_x_scale = mvs_x_scale,
             .mvs_y_scale = mvs_y_scale,
             .auto_exposure = auto_exposure != 0,
-            .prefer_fsr3 = prefer_fsr3 != 0,
             .render_preset = unsigned(render_preset),
          };
       }
@@ -55,11 +53,11 @@ namespace
    std::istream& operator>>(std::istream& stream, Settings& settings)
    {
       return stream >> settings.render_width >> settings.render_height >> settings.output_width >> settings.output_height >> settings.hdr >> settings.inverted_depth >>
-             settings.mvs_jittered >> settings.auto_exposure >> settings.dynamic_resolution >> settings.mvs_x_scale >> settings.mvs_y_scale >> settings.render_preset >> settings.prefer_fsr3;
+             settings.mvs_jittered >> settings.auto_exposure >> settings.dynamic_resolution >> settings.mvs_x_scale >> settings.mvs_y_scale >> settings.render_preset;
    }
 } // namespace
 
-static int RunHelper()
+int main()
 {
    // Only this reads stdin
    std::ios::sync_with_stdio(false);
@@ -188,28 +186,3 @@ static int RunHelper()
    runner.FinishProfile();
    return quit(0);
 }
-
-#if defined(LUMA_UPSCALER_DLL)
-// The same helper as a dll, for Windows' own rundll32 (rundll32 "Luma-Upscaler.dll",LumaUpscaler): its stdin and stdout are the pipe and the log
-// file the bridge gave the process, as for the exe. A package then ships no exe.
-extern "C" __declspec(dllexport) void CALLBACK LumaUpscaler(HWND, HINSTANCE, LPSTR, int)
-{
-   // The application folder is rundll32's: the FSR and XeSS libraries are looked up in this dll's own folder (the game's) too
-   HMODULE self = nullptr;
-   wchar_t path[MAX_PATH] = {};
-   if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, reinterpret_cast<LPCWSTR>(&LumaUpscaler), &self) && GetModuleFileNameW(self, path, MAX_PATH))
-   {
-      if (wchar_t* const separator = wcsrchr(path, L'\\'))
-      {
-         *separator = L'\0';
-         AddDllDirectory(path);
-      }
-   }
-   RunHelper();
-}
-#else
-int main()
-{
-   return RunHelper();
-}
-#endif
