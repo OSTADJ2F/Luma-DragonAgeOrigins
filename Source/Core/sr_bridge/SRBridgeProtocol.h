@@ -22,6 +22,8 @@ namespace SRBridgeProtocol
    constexpr int kVersion = 6;
 
    constexpr const wchar_t* kHelperName = L"Luma-Upscaler.exe";
+   // The same helper as a dll, run by Windows' own rundll32 (entry "LumaUpscaler"): a release package ships no exe. Preferred when present.
+   constexpr const wchar_t* kHelperDllName = L"Luma-Upscaler.dll";
    constexpr const wchar_t* kLogName = L"Luma-Upscaler.log";
 
    enum Upscaler

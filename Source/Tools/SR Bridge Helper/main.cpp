@@ -6,7 +6,9 @@
 
 #include "../../Core/dlss/DLSS.h"
 #include "../../Core/fsr/FSR.h"
+#if ENABLE_XESS
 #include "../../Core/xess/XeSS.h"
+#endif
 
 #include <iostream>
 #include <memory>
@@ -57,7 +59,7 @@ namespace
    }
 } // namespace
 
-int main()
+static int RunHelper()
 {
    // Only this reads stdin
    std::ios::sync_with_stdio(false);
@@ -111,10 +113,12 @@ int main()
       type = SR::Type::FSR;
       upscaler_impl = std::make_unique<FidelityFX::FSR>();
       break;
+#if ENABLE_XESS
    case kXess:
       type = SR::Type::XeSS;
       upscaler_impl = std::make_unique<Intel::XeSS>();
       break;
+#endif
    default:
       return printf("[Luma Upscaler] FAIL unknown upscaler %d\n", upscaler), 1;
    }
@@ -186,3 +190,17 @@ int main()
    runner.FinishProfile();
    return quit(0);
 }
+
+#if defined(LUMA_UPSCALER_DLL)
+// The same helper as a dll, for Windows' own rundll32 (rundll32 "Luma-Upscaler.dll",LumaUpscaler): its stdin and stdout are
+// the pipe and the log file the bridge gave the process, exactly as for the exe. A release package then ships no exe.
+extern "C" __declspec(dllexport) void CALLBACK LumaUpscaler(HWND, HINSTANCE, LPSTR, int)
+{
+   RunHelper();
+}
+#else
+int main()
+{
+   return RunHelper();
+}
+#endif

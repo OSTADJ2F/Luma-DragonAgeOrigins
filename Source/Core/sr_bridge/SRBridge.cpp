@@ -121,7 +121,20 @@ namespace SRBridge
 
       // The helper next to the exe: its stdin a pipe, its output the log file there
       const std::filesystem::path directory = System::GetModulePath().parent_path();
-      const std::filesystem::path helper_path = directory / kHelperName;
+      // The dll through the system's 64 bit rundll32 (Sysnative reaches it from a 32 bit process), else the exe
+      std::error_code exists_error;
+      const std::filesystem::path helper_dll_path = directory / kHelperDllName;
+      const bool use_dll = std::filesystem::exists(helper_dll_path, exists_error);
+      std::filesystem::path helper_path = directory / kHelperName;
+      std::wstring helper_command = L"\"" + helper_path.wstring() + L"\"";
+      if (use_dll)
+      {
+         wchar_t windows_directory[MAX_PATH] = {};
+         GetWindowsDirectoryW(windows_directory, MAX_PATH);
+         const std::filesystem::path sysnative = std::filesystem::path(windows_directory) / L"Sysnative" / L"rundll32.exe";
+         helper_path = std::filesystem::exists(sysnative, exists_error) ? sysnative : std::filesystem::path(windows_directory) / L"System32" / L"rundll32.exe";
+         helper_command = L"\"" + helper_path.wstring() + L"\" \"" + helper_dll_path.wstring() + L"\",LumaUpscaler";
+      }
       SECURITY_ATTRIBUTES inherit = {sizeof(inherit), nullptr, TRUE};
       HANDLE pipe_read = nullptr;
       const HANDLE log_file = CreateFileW((directory / kLogName).c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, &inherit, CREATE_ALWAYS, 0, nullptr);
@@ -134,7 +147,7 @@ namespace SRBridge
          startup.dwFlags = STARTF_USESTDHANDLES;
          startup.hStdInput = pipe_read;
          startup.hStdOutput = startup.hStdError = log_file;
-         std::wstring command = L"\"" + helper_path.wstring() + L"\"";
+         std::wstring command = helper_command;
          // Suspended until it's in the job, so it can't outlive the game even if it's killed right away
          started = CreateProcessW(helper_path.c_str(), command.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW | CREATE_SUSPENDED, nullptr, directory.c_str(), &startup, &process_info);
          if (started)
@@ -215,7 +228,7 @@ namespace SRBridge
          files_present = std::filesystem::exists(directory / L"libxess.dll", error);
          break;
       }
-      custom_data->is_supported = files_present && std::filesystem::exists(directory / kHelperName, error);
+      custom_data->is_supported = files_present && (std::filesystem::exists(directory / kHelperDllName, error) || std::filesystem::exists(directory / kHelperName, error));
       return custom_data->is_supported;
    }
 
