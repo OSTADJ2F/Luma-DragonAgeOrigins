@@ -73,7 +73,7 @@ framework-bound.
 |---|---|---|
 | `Shaders/Includes/GTVBAO.hlsl` | **yes** — `Shaders/Dragon Age Origins/Includes/` | only the DAO AO shader includes it |
 | `Shaders/Includes/MotionVectorFill.hlsl` | **yes**, same folder | only the DAO MV fill shader includes it |
-| `Scripts/dgVoodoo/dgVoodoo-2.87.3.conf` | **yes** — `Data/Dragon Age Origins/` | packaging input |
+| `Scripts/dgVoodoo/dgVoodoo.conf` (2.87.6) | **yes** — `Data/Dragon Age Origins/dgVoodoo.conf` | packaging input |
 | `draw.hpp`'s `GetViewTextureSize` (12 lines), `ReleaseBloom` (8), `ReleaseKarisAverage` (5) | **yes** — reimplemented as `DaoViewTextureSize` / `DaoReleaseBloom` / `DaoReleaseKarisAverage` in `main.cpp` | they only reach Core globals (`draw_bloom_mips`, `device_data.managed_resources`), which the game TU is compiled next to. `DrawBloom`, `DrawKarisAverage`, `DrawRCAS`, `DrawSMAA` are upstream and stay |
 | `SetTextureMipLodBias` | **no** | its live path needs the fork's `RebindUpgradedSamplers` and `CommandListData::applied_texture_mip_lod_bias_offset`; upstream only applies `texture_mip_lod_bias_offset` when a sampler is created, so a copy would be a no-op |
 | `includes/swapchain_proxy.hpp` | **no** | `core.hpp` calls it 16× (swapchain creation, `GetBuffer` interception, resize, the encode at present) |

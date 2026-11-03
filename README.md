@@ -29,7 +29,7 @@ anisotropic filtering, the 1000 nit peak cap, and the FSR version choice.
 ## Requirements
 
 - Dragon Age: Origins (GOG or Steam), 32-bit executable.
-- **dgVoodoo2 2.87.3** (`d3d9.dll` in `bin_ship`). The shader hashes are tied to the wrapper version; changing it
+- **dgVoodoo2 2.87.6** (`d3d9.dll` in `bin_ship`, shipped with 2.87.6's `dgVoodoo.conf`). The shader hashes are tied to the wrapper version; changing it
   breaks every shader replacement.
 - **ReShade 6.8+ with add-on support** (`dxgi.dll`).
 - Windows 10/11, an HDR display for HDR output. On an SDR display the mod runs in SDR (decided at game start).

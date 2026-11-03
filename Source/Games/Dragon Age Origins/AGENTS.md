@@ -31,7 +31,7 @@ DAO is D3D9, so it runs through **dgVoodoo2** (`d3d9.dll` in the game folder), w
 then hooks the D3D11 side. Consequences you must remember:
 
 - Every game shader Luma sees is a **dgVoodoo translation** (`ps_5_0`), not BioWare's original. Shader hashes depend on the dgVoodoo
-  version. The pinned version is **2.87.3**-era configs (`Scripts/dgVoodoo/*.conf`). Changing dgVoodoo changes the hashes: do not.
+  version. The pinned version is **2.87.6** (`dgVoodoo2_87_6.zip`, the x86 `D3D9.dll`, shipped with `Data/Dragon Age Origins/dgVoodoo.conf`). Changing dgVoodoo changes the hashes: do not.
 - Game shaders read only constant buffers **cb3** and **cb4**. D3D9 constant `cN` is `cb4[N + 8]` in pixel shaders. Vertex shader `cN` is
   `cb4[N + 20]`.
 - **The dgVoodoo mask rule:** after every texture sample, dgVoodoo emits an `and`/`or` pair against `cb3[44]`/`cb3[45]` (format masks). A
