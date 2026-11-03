@@ -1,0 +1,23 @@
+By: @amirj2f
+
+"The Fade has never been this bright."
+
+**Luma: Dragon Age: Origins** (work in progress)
+
+• Real HDR (and a real SDR mode)
+• Recovered highlights, with their colour (sky, sun, fire)
+• Luma TAA, DLSS and FSR anti-aliasing
+• Bloom: Luma, the game's own, or off
+• Film Grain
+• Ambient Occlusion (XeGTAO or GT-VBAO)
+• HDR-aware MSAA resolve and SMAA
+• Anisotropic Filtering
+• HUD Scale (Auto by default: the HUD, menus and click targets at the size a modern screen deserves)
+• Vignette and chromatic aberration
+• Wide color gamut
+• AutoHDR for the videos
+• Hide the HUD for screenshots
+
+**HUD Scale is "Auto" by default**, which is the size the game's interface has at 768 lines: about 1.4x at 1080p and 1.9x at 1440p, with the mouse and click targets on the same scale. Set it to 1.0 for the game's own size.
+
+**Download:**
