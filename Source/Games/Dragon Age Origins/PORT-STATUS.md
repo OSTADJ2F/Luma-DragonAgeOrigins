@@ -147,3 +147,24 @@ What changed since §1:
 - Nothing is committed yet: the framework replacement and the DAO folders are uncommitted changes in the
   clone.
 - No in-game test of this build, and no `git` guard yet to keep future sessions out of `Source/Core`.
+
+## 10. First launch: two framework dependencies found
+
+In game (2026-11-03) the upscalers did not run: `luma_status` reported `mod_active:false`, the log said
+`SR skipped: no input (scene bound true, motion vector target false)`, `scene open 0`, and DLSS/FSR were greyed out.
+
+1. **Motion vectors need our six Core commits.** The mod declares `Game::frame_camera_in_every_draw` and
+   `Game::reuse_last_reprojection`, both read by `SceneMotionVectors::BeginFrame()` in the fork's extra 187 lines.
+   The vendored framework at `23019de8` does not have them, so the scene never opened and every upscaler (Luma TAA
+   included) skipped. Fixed by **vendoring `scene_motion_vectors.h` into `Source/Games/Dragon Age Origins/includes/`**
+   (the fork's version with those features, its two sibling includes repointed at Core), and pointing
+   `MotionVectorPatches.h` at it. Core is untouched.
+2. **The SR helper is an exe, not a dll.** The fork's later commit made it a rundll32 DLL; the vendored framework
+   looks for `Luma-Upscaler.exe` (`kHelperName`), and `SRBridge::IsSupported()` greys DLSS/FSR out while that file is
+   missing — the shipped file was `Luma-Upscaler.dll`. Fixed by restoring `Source/Tools` from `23019de8` and
+   building the x64 helper (it now ships as `Luma-Upscaler.exe`; the stale dll is `Luma-Upscaler.dll.stale` in
+   `bin_ship`). Release packaging must learn that the helper is an exe: `Release-Packaging.md` currently forbids
+   `.exe` in the zip.
+
+Still required in game's options: **Anti-Aliasing (MSAA) off** — the upscalers need the single sample scene and
+depth, and the MSAA resolve override was axed.

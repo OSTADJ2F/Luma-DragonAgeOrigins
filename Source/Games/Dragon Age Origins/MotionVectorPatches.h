@@ -1,7 +1,7 @@
 #pragma once
 
 #include "..\..\Core\includes\motion_vector_patch.h"
-#include "..\..\Core\includes\scene_motion_vectors.h"
+#include "includes\scene_motion_vectors.h" // the vendored copy with the features this mod uses (see its header)
 
 // The game's slots for Core's DXBC motion vector patch (described in "motion_vector_patch.h"; dgVoodoo's registers in
 // "MotionVectorPatch::DgVoodoo"). The census is in "MotionVectorCensus.md" (offline disassembly of the dump + luma_read_cbuffer).
