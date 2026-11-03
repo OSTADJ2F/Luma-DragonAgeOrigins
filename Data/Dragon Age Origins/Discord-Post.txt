@@ -14,7 +14,7 @@ By: @amirj2f
 • 16x anisotropic filtering
 • HUD Scale (Auto by default: the HUD, menus and click targets at the size a modern screen deserves)
 • Vignette and chromatic aberration
-• Wide color gamut
+• Wide color gamut (Gamut Expansion slider, 0.5 by default)
 • AutoHDR for the videos
 • Hide the HUD for screenshots
 

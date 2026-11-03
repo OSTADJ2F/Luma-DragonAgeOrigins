@@ -1,4 +1,4 @@
-# Handoff: Dragon Age: Origins Luma mod (updated 2026-11-02)
+# Handoff: Dragon Age: Origins Luma mod (updated 2026-11-03)
 
 **Read `AGENTS.md` (same folder) first.** It explains the project, the build, the tools and the rules. This file is the current state and
 the work queue. Update it at the end of every session: what changed, what was tested (and how), what is next.
@@ -9,17 +9,24 @@ the work queue. Update it at the end of every session: what changed, what was te
 
 - Branch `dragon-age-origins-sr`, last commit `b5d3d950` (2026-11-02, "Nexus and Discord descriptions for the SDR mode, bloom options and
   Hide UI"). The released feature set is everything committed up to there.
-- A release zip was made earlier: `C:\Stuff\Luma-DAO-release\Luma-Dragon_Age_Origins-x32.zip`. The Nexus page text is
-  `Data/Dragon Age Origins/Nexus-Description.txt`.
-- **Deployed in the game right now:** a **Development-Release** build from 2026-11-02 20:12, which includes the uncommitted Vignette /
-  Chromatic Aberration work, the Ersh style removal (§2) and the new **HUD scale** option (T5). A copy of an older Publishing build sits next to it as
-  `Luma-Dragon Age Origins.addon.release`.
+- **Release zip built 2026-11-03 16:10**: `C:\Stuff\Luma-DAO-release\Luma-Dragon_Age_Origins-x32.2026-11-03-1610.zip` (64.4 MB,
+  Publishing-Release addon md5 `3d8ba403e713e098e5ddb9a1517340b2`), carrying the **Gamut Expansion slider in the release UI** (see the
+  history entry below). `scripts/verify-release-zip.py` passes (runtime set, no executables, addon matches the build, shader identifiers
+  current, shipped helper manifest matches the shipped pair). **Not validated in game yet**, and the SR helper pair in it has still never
+  been run by a game (T8). The Nexus page text is `Data/Dragon Age Origins/Nexus-Description.txt`.
+- **Deployed in the game right now:** the **Development-Release** addon from 2026-11-03 03:25 (md5 `08f4590f40d25dd396bf4c0cb2bbca81`) with the
+  uncommitted work of §2, plus the helper pair of T8: `Luma-Upscaler.dll` is now the mod's **shim** (md5 `4b9990ff7819e7b8a8e2499600891bba`)
+  and `Luma-Upscaler-Core.dll` is the framework's helper, unchanged (md5 `97cd261a049049edd90de6a6b315b955`). A copy of an older
+  Publishing addon sits next to them as `Luma-Dragon Age Origins.addon.release`.
 - HDR/SDR: the addon outputs HDR (scRGB) when Windows HDR is on at game start, real 8-bit SDR otherwise (`sdr_swapchain_on_sdr_display`
   in `DllMain`). `enable_hdr` is `static constexpr true`. (The older "Enable HDR" config checkbox described in earlier notes is gone.)
 
-## 2. Uncommitted work (nothing below is committed)
+## 2. Uncommitted work
 
-`git status` shows:
+**Nothing is uncommitted as of 2026-11-03**: everything below was committed and pushed together (see §5 for the entries).
+The table is kept as the record of what that work was; the next session starts from a clean tree.
+
+The work:
 
 | File | Change | Status |
 |---|---|---|
@@ -28,6 +35,8 @@ the work queue. Update it at the end of every session: what changed, what was te
 | `Source/Games/Dragon Age Origins/main.cpp` | defaults (all off, radius 0.8), config load, new UI section **"Lens Effects"** after Film Grain; **`GamutExpansion` default changed 1.0 → 0.5**; the Ersh `HDRStyle` default, config read and UI combo removed; **T5: the GUI scale mid hook (`OnGUIScaleRead`, `InstallGUIScaleHook`), its config read in `DllMain` and the "HUD Scale" slider (default Auto)** | built, deployed; HUD scaling and vignette/CA confirmed by the user |
 | `Source/Games/Dragon Age Origins/includes/` | **new**: `safetyhook.cpp/.hpp` + `Zydis.c/.h`, copied from Watch Dogs 2's vendored copy (single file amalgamations). Untracked | compiles, see §5 T5 |
 | `Source/Games/Dragon Age Origins/Dragon Age Origins.vcxproj` | `safetyhook.cpp` + `Zydis.c` added, with `ForcedIncludeFiles` cleared for both (the project force includes `GameCBuffers.hlsl` into every C/C++ file) | — |
+| `Source/Games/Dragon Age Origins/SR Helper Shim/` | **new**: `main.cpp` + `Luma Upscaler Shim.vcxproj` (x64), the FSR loader preload and the forward to `Luma-Upscaler-Core.dll` (T8) | built (0 errors), deployed |
+| `Data/Dragon Age Origins/package-release.ps1`, `Release-Packaging.md` | ship the shim as `Luma-Upscaler.dll` and the framework helper as `Luma-Upscaler-Core.dll`; third build step (T8) | — |
 | `Source/Games/Dragon Age Origins/ErshTonemap.hlsl` | **deleted** (tracked; the cancelled Ersh HDR style) | built, deployed |
 | `Scripts/dao_gallery/` | shader coverage tools (untracked) | working, see §4 |
 | `AGENTS.md`, `HANDOFF.md`, `TestScenePlan.md` (this folder) | docs (untracked) | — |
@@ -36,8 +45,6 @@ the work queue. Update it at the end of every session: what changed, what was te
 Known nits in the uncommitted work:
 - Removing `HDRStyle` shifted the `game:<n>` indices of `HighlightColor`, `VignetteStrength`, `VignetteRadius` and `ChromaticAberration`
   down by one: re-count before `luma_set_setting game:<n>`. Saved settings are unaffected (configs load by name).
-- The Chromatic Aberration slider goes 0..0.5 in the UI, while the cbuffer comment and the shader's `saturate` say 0..1. Harmless; make
-  them agree (pick one range) when touching it.
 - The Vignette and Chromatic Aberration are not in `Nexus-Description.txt` / `Discord-Post.txt` yet, nor is the Gamut Expansion default change.
 - In the SDR path the vignette makes the grade run its linear branch even with grain and colour controls off (the `else if` now also
   tests `VignetteStrength > 0`): fine, but check that SDR with everything off is still bit-identical to vanilla.
@@ -45,6 +52,14 @@ Known nits in the uncommitted work:
   (T5), reword it to what the game really does once tested. DAFix is restart only.
 - `Source/Games/Dragon Age Origins/includes/` (safetyhook + Zydis, ~12 MB of `Zydis.c`) is untracked: decide with the user whether the
   vendored third-party sources get committed before any release build (the other games' copies are uncommitted too).
+
+Cleanup (2026-11-03, uncommitted, built 0 errors): removed the stale `TODO (HDR step 1)` and the wrong 2.87.3 note in `main.cpp`; removed
+the never-read `g_frame_index` counter; dropped the dead `CInfinityRolloff.hlsl` include from the colour grade (the rolloff was replaced by
+`HighlightShoulder`); deleted the empty template `Includes/Settings.hlsl` and its include in `Includes/Common.hlsl` (with the `AGENTS.md`
+Includes list); fixed the Chromatic Aberration cbuffer comment to 0..0.5 (matching the UI slider). `LumaGameData` was left as-is: it is
+required by Core's `LUMA_GAME_CB_STRUCTS` guard (`Source/Core/includes/cbuffers.h`), not template scaffolding. Shaders not yet reloaded
+in game (the CInfinityRolloff removal is transitively safe — `Math.hlsl` comes from `Common.hlsl`/`Color.hlsl` — but confirm the grade still
+loads).
 
 ## 3. Work queue (in priority order)
 
@@ -57,7 +72,8 @@ Each task says what "done" means. Do one task at a time, build, and ask the user
    exhaustively verified in SDR.
 3. With MCP: `luma_trace_capture trigger=6B504D9F`, `luma_read_resource` on the grade's render target, settings at 0: no NaN/Inf, and
    compare against a readback from before the change if one exists (`luma_compare`).
-4. Decide with the user whether Gamut Expansion 0.5 is the new default (it changes the release look).
+4. ~~Decide with the user whether Gamut Expansion 0.5 is the new default~~ **decided 2026-11-03: the slider ships in the release UI with
+   0.5 as the default**, so a user can move it back to 0 (vanilla) or up to 1.
 5. Add one line each to `Nexus-Description.txt` (Features list) and `Discord-Post.txt`.
 6. Ask the user to commit. Suggested message: `Dragon Age Origins: Vignette and Chromatic Aberration options, Gamut Expansion default 0.5`.
 
@@ -189,6 +205,91 @@ call — a game null dereference), **not** in the hook (`0x111318`) or the safet
 dumps (2026-10-31: four in `D3D9.dll+0xc56ee`, one at `exe+0x1278f5`, one ucrtbase abort, one debug-break inside the addon), i.e. the game
 was already unstable; watch whether it recurs at high HUD scale only.
 
+### T7. AO halo around character hair — investigated 2026-11-03, **not fixed**
+
+Measured in game (conversation close-up, 2560x1440, Development build) with the MCP tools:
+
+- **The hair is in the depth the AO reads, so this is not a missing-depth problem.** In the captured frame `hair0_pass1` (`0xED7EF749`,
+  +alphatest, 4 draws, entries 422-435) writes the hair depth, then 8 blended `hair0` (`0xD59F0773`) draws (443-474) are depth-test-only on
+  top of it, then 4 more `hair0` draws (479-492) write depth again. All of that is before the first particle draw (`0x5DE6B6F6`) where
+  `RunXeGTAO` runs, and the depth read back at that draw shows the hair silhouette on the visible hair.
+- **The AO's kernel is a world-space radius that is never clamped in pixels.** `EFFECT_RADIUS` 0.5 x `RADIUS_MULTIPLIER` 1.457 = **0.73 m**
+  (falloff 0.3, so occlusion reaches the full 0.73 m), and `XE_GTAO_ADJUST_SCREENSPACE_RADIUS` is a **no-op** (`Shaders/Includes/XeGTAO.hlsl:98`).
+  Pixel radius = 0.73 / (z * 2*tan(30deg)/height): a few dozen px on a wall metres away, **800-2000 px on a head 0.4-1.2 m away**.
+- The default technique is **GT-VBAO** with `GTVBAO_THICKNESS = 0.4 * radius` = **0.29 m** of solid slab behind every depth sample, which is
+  what thin hair cards are not; `GTVBAO_SLICE_COUNT` is only 3 (`XE_GTAO_QUALITY` 3) and the noise index is frozen at 0, so the two spatial
+  denoise passes carry the AO: low frequency, wide.
+- **Measured AO field** (8x8 checkerboard A/B patched into `Luma_DAO_AOApply.hlsl`, one frame, so no cross-frame noise): darkening is ~9% at
+  the character silhouette, decaying to 3-4% at 100-200 px, and it is on **both sides** (hair and the wall behind). That band is the visible
+  "outline around the hair".
+- The `AO Debug View` combo is half broken in the GT-VBAO path: view 3 (AO x8) works (it is done in the shared denoiser), views 1, 2 and 4 are
+  XeGTAO-only because `GTVBAO.hlsl` has no `DebugViewRT`.
+
+Next (shader-only A/B, hot reload, no rebuild, then the user's eye):
+1. Clamp `XE_GTAO_ADJUST_SCREENSPACE_RADIUS` to ~0.05-0.08 of the viewport height (targeted: leaves the world AO alone, fixes close-ups).
+2. `GTVBAO_THICKNESS` 0.4 -> ~0.1 (thin occluders: hair, railings).
+3. If both are needed, re-measure the band and put the winner behind a dev toggle.
+
+Accident to remember: a **broken hot-reload** of `Luma_DAO_AOApply.hlsl` raises Core's `shader_key_valid` assertion (`core.hpp:2290`) and
+**hangs the game** (a modal "Assertion Failed", then no presents). The file was restored byte-for-byte; a shader edit must be syntactically
+complete before `luma_reload_shaders`: never write one with a heredoc that drops the closing brace.
+
+### T8. FSR never started on the dll helper - **fixed 2026-11-03 by a mod-owned shim; in-game check pending**
+
+The user reported "FSR is not working". Live reproduction with the MCP tools: `core.sr_user_type` 3 (FSR) logged `started the helper for FSR`,
+then `the helper exited`, `SR skipped: DrawUpscaler returned no output`, `active false`; `Luma-Upscaler.log` had
+`FSR: amd_fidelityfx_loader_dx12.dll not found next to the game's executable` and `FAIL FSR init or create`, although both AMD dlls sit in
+`bin_ship`.
+
+Cause (verified, do not re-investigate): the helper is a dll hosted by `rundll32`, and Core's `FSR::Init` opens the loader by name with
+`LOAD_LIBRARY_SEARCH_APPLICATION_DIR`, which is the **host process's** folder - `C:\Windows\System32` - not the game's. It was correct while the
+helper was an exe next to the game. DLSS never showed it because NGX finds `nvngx_dlss.dll` its own way. `XeSS.cpp` and both
+`FrameGeneration*` headers have the same by-name pattern (XeSS is excluded here).
+
+**A preload inside the framework helper fixed it (FSR 4.1.1 ran in game) and was reverted at the user's request**: that file is framework
+code, and his standing rule (`AGENTS.md` §0) is that the mod never edits common code. He also decided **not** to ship the helper as
+`Luma-Upscaler.exe` (Nexus forbids executables) and **not** to pin an FSR version (Core's default 4.1.1 stays).
+
+**What ships instead - the mod's own shim** (`Source/Games/Dragon Age Origins/SR Helper Shim/`, x64, `Luma-Upscaler-Shim.dll`): it takes the
+name the SR bridge runs (`Luma-Upscaler.dll`), and in its `LumaUpscaler` entry point it (1) loads `amd_fidelityfx_loader_dx12.dll` from its own
+folder - the game's - with `LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR`, then (2) loads the framework helper, shipped beside it as
+`Luma-Upscaler-Core.dll`, and forwards the call. Core's later by-name open returns the already-loaded loader, because a loaded module is
+matched by its name before any search. No framework file changes: the helper is byte-identical, only renamed.
+
+Packaging (`Data/Dragon Age Origins/package-release.ps1` + `Release-Packaging.md`): a third build step, and the pair goes out as
+`Luma-Upscaler.dll` (the shim) + `Luma-Upscaler-Core.dll` (the framework helper). Still no `.exe` in the zip.
+
+Verified so far: both x64 projects build with 0 errors; deployed to `bin_ship` (shim md5 `393824ca402a033164a31f53b9ff1d8a`, framework
+helper `97cd261a049049edd90de6a6b315b955`); a standalone `rundll32` run with stdin/stdout redirected (the way the bridge starts it) prints
+`amd_fidelityfx_loader_dx12.dll preloaded from the game's folder` and then the helper's own protocol reply, i.e. the preload and the forward both
+work. **Not yet confirmed in game**: needs a launch, then `core.sr_user_type` 3 and `luma_sr_state` (`draw_count` climbing on FSR, no
+`draw_failures`, masks bound), and the user's eye on the picture.
+
+Beyond the preload the shim now carries three mod-owned capabilities (all verified in the standalone `rundll32` harness, which reproduces
+the bridge's handle setup):
+
+1. **Version A/B, no rebuild**: `Luma-Upscaler.ini` (game folder, optional, not shipped) `VariantFolder=` makes a folder's copies of
+   `nvngx_dlss.dll` / `amd_fidelityfx_loader_dx12.dll` / `amd_fidelityfx_upscaler_dx12.dll` win over the game's own. An FSR container that
+   only carries 3.1.x therefore makes Core's own default pick 3.1.5 - the version pin he wanted, as a file, not code. Verified: both FSR
+   files resolved `(variant)` and loaded; an unusable `VariantFolder` warns and falls back.
+2. **Environment report on every start**, e.g. `SR environment: shim built 2026-11-03 15:47 a344b263858a09d8 | core 1.0.0.0
+   a8f0c575ccdefd3c`, the DLSS/FSR file versions (`310.9.16.0`, `4.1.1.2740`, loader `2.3.0.2740`), and one line per missing file that will
+   keep an upscaler from starting (`DLSS will not start: nvngx_dlss.dll is not in <folder>`), instead of Core only greying it out. Also warns
+   about a stray `Luma-Upscaler.exe`.
+3. **Pair check**: `package-release.ps1` writes `Luma-Upscaler-Files.txt` with the FNV-1a 64 of both files; the shim logs `SR pair: matches`
+   or refuses with `only one of the pair was replaced` (unless `AllowMismatch=1`, which warns and continues). The C# in the packager and the
+   C++ in the shim were checked against each other on the same files (both `55284f347d7c580e`).
+
+The environment report is the one that pays off in support threads; keep its format stable when the shim changes.
+
+Still worth doing: report it upstream (`Filoppi/Luma-Framework`) - the helper should resolve its own directory, or those Core loads should fall
+back to the module's folder - and then the shim can be deleted. Left open: FSR is offered in the combo even if the shim or the AMD dlls are
+missing (Core only checks that the files exist); picking it then silently drops SR. `Bridge::Init` reports "not supported" when the files are
+absent, so not shipping them greys the entry out (nothing to do with the shim).
+
+Also worth keeping: this mod feeds the upscaler the scene at the grade's own size (`render_width = scene_desc.Width`), so FSR/DLSS replace the
+game's AA (DLAA-style) at `sr_render_resolution_scale` 1 rather than scaling resolution. `SRUserType` in `ReShade.ini` is still 2 (DLSS).
+
 ## 4. Environment details that are easy to lose
 
 - Built addon names: with `-p:SolutionName=Luma` the file is `Luma-Dragon Age Origins.addon`; without it, `-Dragon Age Origins.addon`
@@ -202,6 +303,34 @@ was already unstable; watch whether it recurs at high HUD scale only.
 
 ## 5. History (newest first)
 
+- 2026-11-03 (uncommitted): **Gamut Expansion is a user setting now.** It was `#if DEVELOPMENT`-gated in both the UI and `LoadConfigs()`,
+  so the release build always ran its 0.5 default; both guards are gone, so the slider appears in the HDR section of the Luma tab
+  (0..1, reset button, tooltip) and a user's value loads from the config. Default stays 0.5. `Nexus-Description.txt` (features line +
+  settings list) and `Discord-Post.txt` name it. Both configurations rebuilt 0 errors; the Publishing build is deployed to `bin_ship` and
+  packaged as the 16:10 zip. Proof it is in the release: the Publishing addon now contains the `Gamut Expansion` label and tooltip (the
+  15:56 build contained neither). Not seen in game yet.
+- 2026-11-03 (T8, uncommitted): the shim gained its three mod-owned features - `VariantFolder` DLL swapping for DLSS/FSR version A/B (an
+  FSR container with only 3.1.x makes Core's default pick 3.1.5, no code), an environment report on every helper start (file versions,
+  missing-file warnings, stray-exe warning), and a pair check against the hashes `package-release.ps1` now writes into
+  `Luma-Upscaler-Files.txt` (refuses loudly when only one file was replaced). All exercised in the standalone rundll32 harness; the in-game
+  FSR check from the previous entry is still pending.
+- 2026-11-03 (T8, uncommitted): **FSR runs again through a mod-owned shim.** The helper is a dll under rundll32, so Core's by-name
+  `amd_fidelityfx_loader_dx12.dll` load searches System32 and FSR never started. A framework-side preload fixed it and was reverted (boundary
+  rule); instead `SR Helper Shim` takes the name the bridge runs, preloads the loader from the game's folder and forwards to the framework
+  helper shipped as `Luma-Upscaler-Core.dll`. No version pin: Core's default 4.1.1 stays. Standalone rundll32 test passes; in-game check
+  still pending. Packaging updated (third build, two helper files, still no exe).
+- 2026-11-03 (T8, nothing left in the tree): FSR cannot start on the dll helper - Core's by-name load of `amd_fidelityfx_loader_dx12.dll`
+  with `LOAD_LIBRARY_SEARCH_APPLICATION_DIR` searches rundll32's System32. A helper-side preload fixed it (FSR 4.1.1 ran in game) and was
+  reverted at the user's request, because that file is framework code: the framework stays byte-identical and the mod ships without
+  working FSR. The diagnosis, the upstream fix and the remaining packaging decision is in T8; the lesson is in `AGENTS.md` §8. No FSR version pin: Core's default (4.1.1 here) stays, per
+  the user's 2026-11-03 call.
+- 2026-11-03 (investigation, no code; T7): the AO's wide outline around character hair was measured in game. The hair is in the depth
+  buffer the AO reads; the cause is the world-space radius (0.73 m) never clamped in screen space plus GT-VBAO's 0.29 m thickness
+  slab on thin hair geometry, at 3 slices with the noise index frozen. Shader-only A/B plan in section 3, T7. The game hung on a
+  broken hot-reload assertion (`shader_key_valid`); the shader file is restored.
+- 2026-11-03 (uncommitted): code cleanup, no behaviour change — stale header TODO and dgVoodoo 2.87.3 note removed, dead `g_frame_index`
+  removed, dead `CInfinityRolloff.hlsl` include removed, empty template `Settings.hlsl` deleted, Chromatic Aberration cbuffer comment
+  corrected to 0..0.5. Development-Release built with 0 errors (no deploy).
 - 2026-11-02 (uncommitted): the **AO defaults are now the author's own tuning** — `g_ao_strength` 0.25 → **0.75** and `g_ao_darkness` 0.15 → **0.40**
   (his last `ReShade.ini` values, `XeGTAOStrength=0.75` / `XeGTAODarkness=0.4`), with both reset buttons following them. These are dev-only settings
   (read from the config and exposed in "Advanced (for Enthusiasts)" only under `#if DEVELOPMENT`), so this is what the **release** ships: AO is

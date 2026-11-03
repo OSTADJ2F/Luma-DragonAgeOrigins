@@ -1,10 +1,7 @@
 // Dragon Age: Origins - Luma HDR mod (Eclipse engine 2009, 32-bit, DX9 -> D3D11 via dgVoodoo2).
 // Started from the template and the Mass Effect / Medal of Honor Airborne / Borderlands 2 DX9 ports.
-// Shader hashes are dgVoodoo-TRANSLATED and change per wrapper build, so pin one dgVoodoo version (2.87.3 is what the
-// other DX9 ports use) and dump the shaders again if you change it.
-//
-// TODO (HDR step 1): run a DEVELOPMENT build, find the pass that ends the frame (the one that saturate()s into the
-// 8-bit canvas), replace it with an HDR version in "Shaders/Dragon Age Origins", and key it by hash in OnDrawOrDispatch().
+// Shader hashes are dgVoodoo-TRANSLATED and change per wrapper build, so pin one dgVoodoo version (this mod pins
+// 2.87.6) and dump the shaders again if you change it.
 
 // No DEVELOPMENT auto-debugger MessageBox on DLL attach: invisible under borderless/fullscreen and it blocks the
 // loader (ReShade times out the addon load -> error 1114). Same failure as the other dgVoodoo ports.
@@ -39,7 +36,6 @@
 static constexpr bool enable_hdr = true;
 // RCAS sharpening after the upscaler (0 = off), see "DrawUpscaler()"
 static float g_rcas_sharpness = 0.25f;
-static std::atomic<int64_t> g_frame_index = 0;
 
 // Hides the HUD (for clean screenshots): the game's draws into the canvas after the colour grade are skipped. Session-only, never
 // persisted: a stuck "on" would look like a broken HUD.
@@ -457,7 +453,7 @@ public:
       sr_game_tooltip = "Needs Anti-Aliasing (MSAA) off in the game's options. DLSS and FSR require Luma-Upscaler.dll next to the game's exe.\n";
       SetEvents(true);
 
-      // Placeholders: confirm these against the dumped shaders once the final pass is identified.
+      // The game's encoding: the vanilla grade is sRGB (VANILLA_ENCODING_TYPE 0), decoded as gamma 2.2 (GAMMA_CORRECTION_TYPE 1); no early display encoding.
       GetShaderDefineData(POST_PROCESS_SPACE_TYPE_HASH).SetDefaultValue('0');
       GetShaderDefineData(EARLY_DISPLAY_ENCODING_HASH).SetDefaultValue('0');
       GetShaderDefineData(VANILLA_ENCODING_TYPE_HASH).SetDefaultValue('0');
@@ -1649,7 +1645,6 @@ private:
       }
 #endif
 
-      g_frame_index++;
       game_device_data.ao_done_this_frame = false;
       game_device_data.bloom_drawn_this_frame = false;
       if (cb_luma_global_settings.GameSettings.BloomType < 1.5f && game_device_data.srv_luma_bloom)
@@ -1778,9 +1773,7 @@ private:
       reshade::get_config_value(runtime, NAME, "HighlightDesatEnd", cb_luma_global_settings.GameSettings.HighlightDesatEnd);
       reshade::get_config_value(runtime, NAME, "BokehTaps", cb_luma_global_settings.GameSettings.BokehTaps);
       reshade::get_config_value(runtime, NAME, "BokehHighlightBoost", cb_luma_global_settings.GameSettings.BokehHighlightBoost);
-#if DEVELOPMENT
       reshade::get_config_value(runtime, NAME, "GamutExpansion", cb_luma_global_settings.GameSettings.GamutExpansion);
-#endif
       reshade::get_config_value(runtime, NAME, "VideoAutoHDREnable", cb_luma_global_settings.GameSettings.VideoAutoHDREnable);
       reshade::get_config_value(runtime, NAME, "VideoAutoHDRBoost", cb_luma_global_settings.GameSettings.VideoAutoHDRBoost);
       // "BloomType" (Off / Game / Luma) replaced the "LumaBloomEnable" on/off (Luma / Game): an older config's choice is carried over
@@ -1902,7 +1895,6 @@ private:
       if (DrawResetButton(cb_luma_global_settings.GameSettings.HighlightDesaturation, default_luma_global_game_settings.HighlightDesaturation, "HighlightDesaturation", runtime))
          device_data.cb_luma_global_settings_dirty = true;
 
-#if DEVELOPMENT // Fixed at its default in the release
       if (ImGui::SliderFloat("Gamut Expansion", &cb_luma_global_settings.GameSettings.GamutExpansion, 0.f, 1.f, "%.2f"))
       {
          reshade::set_config_value(runtime, NAME, "GamutExpansion", cb_luma_global_settings.GameSettings.GamutExpansion);
@@ -1912,7 +1904,6 @@ private:
          ImGui::SetTooltip("Stretches the colors from BT.709 towards BT.2020.\nThe game's colors are mostly well inside BT.709, so the effect is subtle.\n0 is vanilla. HDR only.");
       if (DrawResetButton(cb_luma_global_settings.GameSettings.GamutExpansion, default_luma_global_game_settings.GamutExpansion, "GamutExpansion", runtime))
          device_data.cb_luma_global_settings_dirty = true;
-#endif
       ImGui::EndDisabled();
       } // enable_hdr
 

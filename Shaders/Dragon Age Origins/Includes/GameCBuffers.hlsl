@@ -42,7 +42,7 @@ namespace CB
 		float HighlightColor;        // 0..1: how much of their own hue and saturation the recovered highlights get back where the game's curve clipped them to white (0 = white, as before)
 		float VignetteStrength;      // 0..1: how far the corners are darkened in the color grade (0 = off)
 		float VignetteRadius;        // 0.3..1.5: the distance from the centre (in half screen heights) where the darkening starts
-		float ChromaticAberration;   // 0..1: red and blue fringes that grow towards the screen edges, in the color grade (0 = off)
+		float ChromaticAberration;   // 0..0.5: red and blue fringes that grow towards the screen edges, in the color grade (0 = off)
 	};
 	
 	// The motion vector fill's constants (Luma_DAO_MotionVectorFill.hlsl, b0), written by "DrawUpscaler"

@@ -15,6 +15,13 @@ makes every future framework update a conflict. `Scripts/check-mod-boundary.sh` 
 and rejects any commit that touches those paths unless its message starts with `Framework:` (used when vendoring an
 upstream update). See `PORT-STATUS.md` for what was removed to get here (the axed features are gone for good).
 
+**Standing rule (the user's own, stated 2026-11-03): the mod does not edit common code to make itself work.** A fix belongs in the
+three mod folders. When the only fix is framework-side, stop and ask the user first, saying what the framework lacks and what the
+game-side workaround would cost - never decide that on his behalf, and never smuggle a mod fix into a `Framework:` commit (that prefix
+is for vendoring an upstream update, not for carrying this mod). **He decided the FSR loader case that way on 2026-11-03: the helper
+preload was reverted, the framework stays byte-identical, and FSR is unavailable in the shipped mod until the framework itself anchors that
+load to the helper's folder.** Do not re-add it as a mod fix, and do not "work around" it game-side (see `HANDOFF.md` T8).
+
 Older notes below (`HANDOFF.md`, `TestScenePlan.md`, the paths in the build section) still describe the previous
 repo, `C:\Stuff\Luma`, which had every other Luma game and the framework's own history. The build commands are the
 same, with `C:\Stuff\Luma-framework-clean` as the repo root.
@@ -48,7 +55,7 @@ What the mod adds (all shipped in the current release unless marked):
 | Light Source Boost (brighter cores of fire/magic sprites, sky sun) | `Particle_0x5DE6B6F6`, `VFXAlpha_0x41DE4D45`, `VFXVolume_0x0A2ABD19`, `Sky_0x1A13F3EF` |
 | Bloom: Off / Game / Luma pyramid bloom | `OnDrawOrDispatch` bloom block, `Luma_Bloom_impl.hlsl` |
 | Ambient occlusion (XeGTAO or GT-VBAO, the game has none) | `RunXeGTAO()`, `Luma_DAO_XeGTAO.hlsl`, `Luma_DAO_AOApply.hlsl`, `Luma_DAO_DepthLinearize.hlsl` |
-| Upscalers / AA: DLSS, FSR (both run in a 64-bit helper, `Luma-Upscaler.dll` through rundll32, "SR bridge"; Luma TAA was removed, see PORT-STATUS §12) | `DrawUpscaler()`, `FillMotionVectors()`, `MotionVectorPatches.h`, Core `scene_motion_vectors.h` |
+| Upscalers / AA: DLSS, FSR (both run in a 64-bit helper, `Luma-Upscaler.dll` through rundll32 - that name is now the mod's `SR Helper Shim`, which preloads FSR's loader and forwards to the framework helper `Luma-Upscaler-Core.dll`, "SR bridge"; Luma TAA was removed, see PORT-STATUS §12) | `DrawUpscaler()`, `FillMotionVectors()`, `MotionVectorPatches.h`, Core `scene_motion_vectors.h` |
 | SMAA on top of the game's 8x MSAA, HDR-aware MSAA resolve | `OverrideResolveTextureRegion()`, `ResolveAndSMAA()`, `Luma_SMAA_impl.hlsl`, `Luma_DAO_ResolveMSAA.hlsl` |
 | RCAS sharpening after the upscaler | `DrawUpscaler()` |
 | Cutscene bokeh depth of field | `DoFComposite_0xB507EFCE.ps_5_0.hlsl`, `BindDoFScene()` |
@@ -124,7 +131,7 @@ Repo root: `C:\Stuff\Luma`. Paths below are relative to it.
 - `Shaders/Dragon Age Origins/<Name>_0x<HASH>.ps_5_0.hlsl` — file replacements of game shaders, matched by hash in the file name.
 - `Shaders/Dragon Age Origins/Luma_*.hlsl` — Luma's own passes (registered in `OnInit` or by Core).
 - `Shaders/Dragon Age Origins/Includes/GameCBuffers.hlsl` — **`CB::LumaGameSettings`, the settings struct shared by C++ and HLSL.**
-- `Shaders/Dragon Age Origins/Includes/` — `Common.hlsl`, `Settings.hlsl`, `DAOCamera.hlsl` (near 0.15, far 4000, 60° vertical FOV),
+- `Shaders/Dragon Age Origins/Includes/` — `Common.hlsl`, `DAOCamera.hlsl` (near 0.15, far 4000, 60° vertical FOV),
   `FilmGrain.hlsl`, `UIPreScale.hlsl`.
 - `Shaders/Includes/` — generic Luma includes (Color, Oklab, Reinhard, DgVoodoo, SMAA, MotionVectorFill, ...). Shared with other games.
 - `Shaders/Dragon Age Origins/Dump/` — shaders dumped by dev builds (531 files). `*.cso` is git-ignored.
@@ -266,6 +273,19 @@ blocks, greyed out when `cb_luma_global_settings.DisplayMode == DisplayModeType:
 - **Bokeh DoF cost** is linear in taps (~0.026 ms/tap at 1440p); default 24 taps with a mip chain. See `PerformanceNotes.md`.
 - **SR bridge:** DLSS/FSR run in a 64-bit helper (game is 32-bit), so each frame copies ~6 textures across processes. Low GPU usage
   with DLSS is the fence wait, not a free GPU.
+- **The SR helper runs as a dll inside rundll32, so its "application directory" is System32.** Core's `FSR::Init` opens
+  `amd_fidelityfx_loader_dx12.dll` by name with `LOAD_LIBRARY_SEARCH_APPLICATION_DIR`, which found the game's copy only while the helper
+  was an exe sitting next to it. As a dll it logged "not found next to the game's executable", the helper exited and SR fell back to
+  none (DLSS is unaffected: NGX finds `nvngx_dlss.dll` itself). **The mod fixes this without touching framework code**: its own
+  `Source/Games/Dragon Age Origins/SR Helper Shim` takes the dll name Core runs, loads the loader from the game's folder in the entry
+  point, then forwards to the framework helper, which ships beside it as `Luma-Upscaler-Core.dll` (an already loaded module is matched by
+  name, so Core's later by-name open returns it). A helper-side preload was tried first and reverted for the boundary rule. `XeSS.cpp`
+  and both `FrameGeneration*` headers have the same by-name pattern (XeSS is excluded here): any by-name load inside the helper has this
+  trap. The clean fix is still the framework's (anchor the load to the helper's own folder) - report it upstream. The shim also logs what
+  it resolved every start (file versions, `nvngx_dlss.dll` 310.9.16.0 and the FSR container's version, plus the pair's FNV-1a 64), names the
+  files whose absence keeps an upscaler from starting, refuses when `Luma-Upscaler-Files.txt` doesn't match the pair, and honours
+  `VariantFolder`/`AllowMismatch` from `Luma-Upscaler.ini` (an optional, unshipped file: `Data/Dragon Age Origins/Release-Packaging.md` has
+  the log sample and the FSR/DLSS version A/B recipe).
 - **dgVoodoo creates DX11 shaders lazily.** A DX9 shader the game never drew this session is not in the dump. Coverage is built up by
   playing different areas/effects/graphics settings (`hunt_dx9.py` lists where).
 - **Python via shell heredocs:** `\n` inside strings can become a real newline. Write `chr(92) + 'n'` when generating C++ string literals.

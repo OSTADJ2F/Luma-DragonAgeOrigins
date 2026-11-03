@@ -15,7 +15,6 @@
 #include "Includes/Common.hlsl"
 #include "../Includes/Color.hlsl"
 #include "../Includes/ColorGradingLUT.hlsl" // SimpleGamutClip
-#include "../Includes/CInfinityRolloff.hlsl"
 #include "../Includes/Oklab.hlsl"
 #include "../Includes/DgVoodoo.hlsl"
 #include "Includes/FilmGrain.hlsl"

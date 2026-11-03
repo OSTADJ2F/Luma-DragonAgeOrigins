@@ -5,7 +5,8 @@
 # zips the result with a dated name:
 #
 #   d3d9.dll + dgVoodoo.conf   dgVoodoo2 2.87.6 (the shader hashes are tied to this version)
-#   Luma-Upscaler.dll          the x64 DLSS/FSR helper, run by Windows' own rundll32 (Core launches it that way)
+#   Luma-Upscaler.dll          the mod's shim (preloads FSR's loader from this folder), run by Windows' own rundll32
+#   Luma-Upscaler-Core.dll     the framework's x64 DLSS/FSR helper, unchanged, which the shim forwards to
 #   nvngx_dlss.dll             DLSS, loaded by the helper
 #   amd_fidelityfx_*.dll       FSR, loaded by the helper
 #
@@ -53,7 +54,31 @@ try {
     # The x64 helper (a dll run through rundll32, so the zip carries no exe) and the two upscaler libraries it loads
     $helper = Join-Path $repoRoot "Binaries\Win32-$Config\Luma-Upscaler.dll"
     if (-not (Test-Path $helper)) { throw "Luma-Upscaler.dll not built (build Source\Tools\SR Bridge Helper DLL, x64)" }
-    Copy-Item $helper -Destination (Join-Path $pkg "Luma-Upscaler.dll") -Force
+    # The mod's shim takes the name Core looks for and preloads the FidelityFX loader from the game's folder for it (it otherwise
+    # searches rundll32's System32 and FSR fails to start); the framework helper travels beside it, unchanged, under another name
+    $shim = Join-Path $repoRoot "Binaries\Win32-$Config\Luma-Upscaler-Shim.dll"
+    if (-not (Test-Path $shim)) { throw "Luma-Upscaler-Shim.dll not built (build Source\Games\Dragon Age Origins\SR Helper Shim, x64)" }
+    Copy-Item $helper -Destination (Join-Path $pkg "Luma-Upscaler-Core.dll") -Force
+    Copy-Item $shim -Destination (Join-Path $pkg "Luma-Upscaler.dll") -Force
+    # The pair's hashes, so the shim can name a half-replaced install instead of failing on a protocol mismatch (FNV-1a 64, the number
+    # the shim computes itself; the C# is unchecked arithmetic so it wraps the same way)
+    Add-Type -TypeDefinition @'
+public static class DaoFnv1a64 {
+    public static ulong Hash(string path) {
+        ulong hash = 14695981039346656037UL;
+        using (var stream = System.IO.File.OpenRead(path)) {
+            int value;
+            while ((value = stream.ReadByte()) >= 0) { hash ^= (ulong)value; hash *= 1099511628211UL; }
+        }
+        return hash;
+    }
+}
+'@
+    $pairLines = @("# the SR helper pair this package was built with: <file> fnv1a64")
+    foreach ($name in @("Luma-Upscaler.dll", "Luma-Upscaler-Core.dll")) {
+        $pairLines += ("{0} {1:x16}" -f $name, [DaoFnv1a64]::Hash((Join-Path $pkg $name)))
+    }
+    Set-Content -Path (Join-Path $pkg "Luma-Upscaler-Files.txt") -Value $pairLines -Encoding ASCII
     Copy-Item (Join-Path $repoRoot "Source\External\NGX\bin\rel\nvngx_dlss.dll") -Destination $pkg -Force
     Copy-Item (Join-Path $repoRoot "Source\External\FidelityFX-API\signedbin\amd_fidelityfx_loader_dx12.dll") -Destination $pkg -Force
     Copy-Item (Join-Path $repoRoot "Source\External\FidelityFX-API\signedbin\amd_fidelityfx_upscaler_dx12.dll") -Destination $pkg -Force

@@ -24,7 +24,7 @@ Native HDR for Dragon Age: Origins (and an SDR mode), with DLSS or FSR anti-alia
 [*][b]A HUD that fits a modern screen:[/b] the game draws its interface for 1024x768, so it stays small on a 1080p or 1440p display. [b]HUD Scale[/b] enlarges the HUD, menus and the character sheet together (the mouse and every click target follow the same scale, so nothing drifts). [b]"Auto" is the default[/b]: the size the HUD has at 768 lines, about 1.4x at 1080p and 1.9x at 1440p. Any size from 0.5x to 3x can be picked, and 1.0 is the game's own.
 [*][b]More detail in the dark:[/b] a shadow lift that brings back detail in the darkest areas.
 [*][b]Natural highlights:[/b] the very brightest lights fade towards white, like on film, instead of staying a vivid colour.
-[*][b]Richer colours:[/b] the game's colours use the wider range of an HDR display.
+[*][b]Richer colours:[/b] the game's colours use the wider range of an HDR display (the [b]Gamut Expansion[/b] slider tunes it).
 [*][b]HDR for the movies:[/b] a light brightness boost for the pre-rendered videos.
 [*][b]Sharper textures:[/b] 16x anisotropic filtering, always on.
 [*][b]Sharpening:[/b] a slider for the upscalers, off by default.
@@ -57,6 +57,7 @@ Keep all the included files together in that folder, and do not swap in a differ
 [*][b]Peak White[/b]: your display's peak brightness, as Windows reports it.
 [*][b]Super Resolution:[/b] None, Auto, DLSS or FSR. A tick appears when it is running. DLSS and FSR can run through Direct3D 11 or 12 (the D3D12 path gives FSR 4 on the newest AMD cards, FSR 3.1 everywhere else); DLSS and FSR 3 look the same either way.
 [*][b]Highlight Desaturation[/b] (0, HDR only): how much the brightest lights fade towards white. 0 keeps their colour.
+[*][b]Gamut Expansion[/b] (0.5, HDR only): how far the game's colours are stretched towards the wider range an HDR display can show. 0 is vanilla.
 [*][b]Exposure, Contrast, Saturation, Temperature:[/b] the usual colour sliders, neutral by default.
 [*][b]Bloom[/b] (Luma): Off, Game (the game's own bloom) or Luma (a wider, softer bloom), and [b]Bloom Intensity[/b] (1.0, for Luma). For Game and Luma keep the game's own Bloom option turned on.
 [*][b]Film Grain[/b] (0.35): 0 turns it off.
