@@ -174,16 +174,32 @@ depth, and the MSAA resolve override was axed.
 Deployed the `Publishing-Release` addon the way a user would - addon + `Luma-Upscaler.exe` + the zip's `Luma/` folder,
 nothing else touched - and launched the game. The addon loaded from `bin_ship`, every shader compiled from `Luma/`
 (one benign X4000 warning in `ColorGradingLUT.hlsl`), zero errors, the motion vector ring was found, and the SR bridge
-started the helper and ran DLSS. A frame in the Senior Mage Quarters renders correctly with the HUD intact. The dev
+started the helper and ran DLSS. A frame in the Senior Mage Quarters rendered correctly with the HUD intact. The dev
 MCP pipe is absent in release builds, as intended.
 
-**Packaging bug found and fixed:** `Shaders/Dragon Age Origins/Includes/GameCBuffers.hlsl` included
-`../../../Source/Core/includes/shader_types.h`. That resolves in the repository (three levels up from
-`Shaders/<game>/Includes` is the repo root) but not in a package, where the shader tree lives under `Luma/`: the
-include resolved to `<game>/Source/Core/includes/...`, which does not exist, so a release build would have failed to
-compile every shader that includes the game cbuffers. `shader_types.h` and `matrix.h` are now copied next to it in
-`Includes/` and included by bare name, so the same source resolves in both layouts. Keep those two copies in sync with
-`Source/Core/includes/`.
+Correction, for the record: an earlier pass of this note claimed `GameCBuffers.hlsl`'s
+`#include "../../../Source/Core/includes/shader_types.h"` broke packaged builds. It does not. That include sits inside
+`#ifdef __cplusplus` - it exists so C++ can read the cbuffer structs, and the shader compiler never sees it. Copying
+`shader_types.h`/`matrix.h` next to it made the C++ build include both copies (`#pragma once` is per path) and broke
+the compile; the copies were removed and the original include restored.
 
 Known gap, pre-existing: `Shaders/Includes/FXAA.hlsl` includes `Fxaa3_11.h`, which is in neither the repository nor
 the package. FXAA is not used by this mod, so nothing calls it.
+
+## 12. Luma TAA removed (2026-11-03)
+
+Luma TAA is gone, not just switched off. Removed: `Source/Core/taa/LumaTAA.hpp`, `Shaders/Global/Luma_TAA_CS.hlsl`
+and its `.cso` dumps, the `ENABLE_LUMA_TAA` define and every hook behind it in `core.hpp` (the SR enable condition, the
+D3D11-only check, the ten compute shader registrations, the instance wiring, the menu entry, the quality slider, the
+`sr_implementations` entry and the `LumaTAAQuality` config read), its `SR::UserType`/`SR::Type` members and their switch
+cases, and the MCP annotation. `SR::Type` keeps explicit values (`DLSS = 0`, `FSR = 1`, `XeSS = 3`) because those numbers
+are the shaders' `SRType`: removing Luma TAA must not renumber XeSS.
+
+The framework is now modified in `Source/Core/core.hpp`, `Source/Core/includes/super_resolution.h`,
+`Source/Core/includes/mcp_server.inl`, `Source/Core/Core.vcxproj[.filters]` and `Shaders/Global/`. That is a deliberate
+departure from "the framework is vendored unmodified": re-applying Luma TAA from upstream means reverting those hunks.
+The motion vector pipeline is untouched - DLSS and FSR read the same motion vectors, depth and reactive mask.
+
+**XeSS** needs no code change to be excluded: Core's in-process XeSS is already behind `ENABLE_XESS 0`, the package
+never ships `libxess.dll`, and the dev folder's copy was moved to `C:\Stuff\Luma-DAO-dev-backup\xess`. Without the
+dll the SR bridge reports XeSS unsupported and the entry stays greyed out.

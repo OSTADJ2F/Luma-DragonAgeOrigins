@@ -107,11 +107,11 @@ So the options are: fewer slices (a lower quality define: the default is set in 
 by eye, but it was not judged by eye here), or computing the main pass at half resolution (a quarter of the pixels) with a depth aware upsample in the
 apply pass (needs C++: a half size target and dispatch, a restart to test).
 
-## Temporal anti-aliasing (DLSS, FSR, Luma TAA)
+## Temporal anti-aliasing (DLSS, FSR)
 
 Reported as a noticeable frame rate loss with the GPU far from fully used. **Not reproduced yet:** in the scene tested, with DLSS running (the upscaler's
 draw count was increasing) the frame time was 6.89 ms against 6.95 ms with no upscaler, and both were pinned at 144 fps by a cap, so any cost was hidden.
-Re-measure uncapped, or in the heavy scene where the loss was seen, for none, Luma TAA, DLSS and FSR, in the Development and the Publishing build.
+Re-measure uncapped, or in the heavy scene where the loss was seen, for none, DLSS and FSR, in the Development and the Publishing build.
 
 Where cost is expected from reading the code (not measured):
 

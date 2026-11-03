@@ -12,8 +12,8 @@
 
 #define GAME_DRAGON_AGE_ORIGINS 1
 
-// XeSS is deprecated here: no libxess.dll in the package (DLSS, FSR and Luma TAA stay). The upscaler is still listed by Core, so the
-// entry shows and fails if picked: the mod no longer changes Core to hide it.
+// XeSS is not built: no libxess.dll is ever shipped and the dev folder's copy is moved out, so the SR bridge reports it unsupported and
+// Core greys its entry out. DLSS and FSR stay.
 #define ENABLE_NGX 0 // NGX is x64-only and the game is 32-bit
 #define ENABLE_FIDELITY_SK 0
 #define GEOMETRY_SHADER_SUPPORT 0
@@ -25,8 +25,6 @@
 #define ENABLE_POST_DRAW_DISPATCH_CALLBACK 1
 // The motion vector draw key reads "last_draw_dispatch_data", which Publishing only fills with this
 #define ENABLE_DRAW_DISPATCH_DATA_CACHE 1
-// Luma TAA among the upscalers (in process; DLSS and FSR run in the SR bridge's x64 helper, "UseLumaSRBridge")
-#define ENABLE_LUMA_TAA 1
 // No NVIDIA Reflex: latency is left to the game
 #define ENABLE_REFLEX 0
 // RCAS sharpening on the upscaler's output ("DrawRCAS()")
@@ -178,7 +176,7 @@ static constexpr float DAO_NEAR_CPP = 0.15f;
 static constexpr float DAO_FAR_CPP = 4000.f;
 static constexpr float DAO_TAN_HALF_FOV_Y_CPP = 0.577350269f;
 
-// FSR's and Luma TAA's masks, written by the scene's alpha blended draws (particles, smoke, glows) past dgVoodoo's targets: their pixel
+// FSR's masks, written by the scene's alpha blended draws (particles, smoke, glows) past dgVoodoo's targets: their pixel
 // shaders patched with "PatchPixelShaderReactive", the slot max blended in every blend state ("PatchedDraws::OnCreateBlendState")
 constexpr UINT REACTIVE_SLOT = MotionVectorPatches::reactive_slot;
 // The additive draws' reactivity, scaled and capped at 0.9; the alpha blended draws' threshold (Metal Gear Rising's and Bayonetta's values)
@@ -361,7 +359,7 @@ struct DragonAgeOriginsGameDeviceData final : public GameDeviceData
    ComPtr<ID3D11ShaderResourceView> srv_luma_bloom;
    bool bloom_drawn_this_frame = false;
 
-   // ---- DLAA / FSR Native AA / XeSS / Luma TAA / DLSS (Core's SR bridge: the game is 32-bit) on the motion vectors of Core's
+   // ---- DLAA / FSR Native AA / DLSS (Core's SR bridge: the game is 32-bit) on the motion vectors of Core's
    // "SceneMotionVectors" (vc4 layout in "MotionVectorPatches"), before the grade ----
    // An upscaler is picked, hasn't failed and the game's MSAA is off, latched at present for the whole frame
    bool sr_active = false;
@@ -385,7 +383,7 @@ struct DragonAgeOriginsGameDeviceData final : public GameDeviceData
    bool depth_test = false;
    bool depth_write = false;
 
-   // FSR's and Luma TAA's masks: what the alpha blended draws wrote (x reactive, y transparency & composition, max blended; the module's
+   // FSR's masks: what the alpha blended draws wrote (x reactive, y transparency & composition, max blended; the module's
    // "reactive_target", made here), the masks the fill makes of it, and the additive draws' mask of the last frame
    com_ptr<ID3D11Texture2D> reactive;
    com_ptr<ID3D11UnorderedAccessView> reactive_uav;
@@ -678,10 +676,10 @@ public:
       }
    }
 
-   // The upscalers that read the masks: FSR and Luma TAA (DLSS's current presets ignore them)
+   // The upscaler that reads the masks: FSR (DLSS's current presets ignore them)
    static bool IsReactiveMaskUsed(const DeviceData& device_data)
    {
-      return g_sr_reactive_enable && (device_data.sr_type == SR::Type::FSR || device_data.sr_type == SR::Type::LumaTAA);
+      return g_sr_reactive_enable && device_data.sr_type == SR::Type::FSR;
    }
 
    // The bound pixel shader's mask patch, from the pipeline cache's bytecode on first use (null if it can't be patched)
@@ -791,8 +789,7 @@ public:
       }
       const uint2 size = gd.mv.scene_size;
       // The frame camera's reprojection and the viewport jitter (in the depth, not in the motion vectors)
-      // Luma TAA without its 2x history flickers on bright thin particles at the High scale: half of the mask balances flicker and smear
-      const float reactive_scale = (device_data.sr_type == SR::Type::LumaTAA && LumaTAA::quality.load() < LumaTAA::history_2x_quality ? 0.5f : 1.f) * g_sr_reactive_scale;
+      const float reactive_scale = g_sr_reactive_scale;
       CB::MotionVectorFillConstants fill_constants = {
          .jitter_ndc = {gd.jitter[0] * 2.f / float(size.x), gd.jitter[1] * -2.f / float(size.y)},
          .reactive_scale = reactive_scale,
@@ -823,7 +820,7 @@ public:
       return true;
    }
 
-   // The fill, then DLAA, FSR Native AA, XeSS, DLSS or Luma TAA on the jittered scene the grade reads ("scene"). The output's view (the
+   // The fill, then DLAA, FSR Native AA or DLSS on the jittered scene the grade reads ("scene"). The output's view (the
    // grade reads it in the scene's place), null if it didn't draw (missing input, or the upscaler failed).
    static ID3D11ShaderResourceView* DrawUpscaler(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, DeviceData& device_data, ID3D11ShaderResourceView* scene)
    {
@@ -904,7 +901,7 @@ public:
                .mvs_x_scale = float(scene_desc.Width),
                .mvs_y_scale = float(scene_desc.Height),
                // Not for DLSS (a fixed exposure): its transformer presets (J to M) flickered the dark, smooth sky, and an outline of it ghosted ahead
-               // of the camera's rotation, as the auto exposure followed what was on screen. FSR and Luma TAA don't have the problem.
+               // of the camera's rotation, as the auto exposure followed what was on screen. FSR doesn't have the problem.
                .auto_exposure = device_data.sr_type != SR::Type::DLSS,
                .render_preset = dlss_render_preset,
             };
@@ -1450,7 +1447,7 @@ private:
       // The scene's opaque mesh materials (the first one of the frame opens the scene)
       static const uint32_t pixel_shader_hashes_scene[] = {Shader::Hash_StrToNum("38A5D9CD"), Shader::Hash_StrToNum("D24D2C23")};
 
-      // DLAA/FSR/XeSS/Luma TAA/DLSS: the scene opens at its first mesh draw and the draws into it take motion vectors (see
+      // DLAA/FSR/DLSS: the scene opens at its first mesh draw and the draws into it take motion vectors (see
       // "DrawWithMotionVectors") and the viewport jitter; the fill and the upscaler run at the grade
       if (game_device_data.mv.active && is_immediate && !game_device_data.has_drawn_tonemap)
       {
@@ -1732,7 +1729,7 @@ private:
          game_device_data.mv.constants.ReleasePool();
       }
       game_device_data.mv.constants.TrimPool(game_device_data.mv.active);
-      // DLSS or none picked: no reader of the masks (recreated when FSR or Luma TAA is picked again)
+      // DLSS or none picked: no reader of the masks (recreated when FSR is picked again)
       if (!IsReactiveMaskUsed(device_data) && game_device_data.mv.reactive_target)
       {
          game_device_data.ReleaseReactiveMasks();
@@ -2137,7 +2134,7 @@ private:
       if (ImGui::SliderFloat("RCAS Sharpness", &g_rcas_sharpness, 0.f, 1.f, "%.2f"))
          reshade::set_config_value(runtime, NAME, "RCASSharpness", g_rcas_sharpness);
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-         ImGui::SetTooltip("AMD's RCAS sharpening on the upscaler's output (Luma TAA, DLSS, FSR), which can look a little soft. It limits itself on bright pixels.\n0 is off.");
+         ImGui::SetTooltip("AMD's RCAS sharpening on the upscaler's output (DLSS, FSR), which can look a little soft. It limits itself on bright pixels.\n0 is off.");
       DrawResetButton(g_rcas_sharpness, 0.25f, "RCASSharpness", runtime);
       ImGui::EndDisabled();
 
@@ -2232,7 +2229,7 @@ private:
       ImGui::PushTextWrapPos(0.f);
       ImGui::Text(
          "Luma for \"Dragon Age: Origins\" is developed by Ostad Gaming and is open source and free.\n"
-         "It runs through dgVoodoo2 (DirectX 9 -> 11) and adds DLSS, FSR or Luma TAA upscaling and anti-aliasing,\n"
+         "It runs through dgVoodoo2 (DirectX 9 -> 11) and adds DLSS or FSR upscaling and anti-aliasing,\n"
          "a wider bloom, XeGTAO or GT-VBAO ambient occlusion and 16x anisotropic filtering.\n"
          "The game's clipped highlights (sky, sun, fire) are recovered and extended up to your display's peak brightness, and the colors can be stretched towards BT.2020.\n"
          "The pre-rendered videos get a light AutoHDR.\n"
