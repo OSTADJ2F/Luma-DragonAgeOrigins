@@ -168,3 +168,22 @@ In game (2026-11-03) the upscalers did not run: `luma_status` reported `mod_acti
 
 Still required in game's options: **Anti-Aliasing (MSAA) off** — the upscalers need the single sample scene and
 depth, and the MSAA resolve override was axed.
+
+## 11. Release package sanity check (2026-11-03)
+
+Deployed the `Publishing-Release` addon the way a user would - addon + `Luma-Upscaler.exe` + the zip's `Luma/` folder,
+nothing else touched - and launched the game. The addon loaded from `bin_ship`, every shader compiled from `Luma/`
+(one benign X4000 warning in `ColorGradingLUT.hlsl`), zero errors, the motion vector ring was found, and the SR bridge
+started the helper and ran DLSS. A frame in the Senior Mage Quarters renders correctly with the HUD intact. The dev
+MCP pipe is absent in release builds, as intended.
+
+**Packaging bug found and fixed:** `Shaders/Dragon Age Origins/Includes/GameCBuffers.hlsl` included
+`../../../Source/Core/includes/shader_types.h`. That resolves in the repository (three levels up from
+`Shaders/<game>/Includes` is the repo root) but not in a package, where the shader tree lives under `Luma/`: the
+include resolved to `<game>/Source/Core/includes/...`, which does not exist, so a release build would have failed to
+compile every shader that includes the game cbuffers. `shader_types.h` and `matrix.h` are now copied next to it in
+`Includes/` and included by bare name, so the same source resolves in both layouts. Keep those two copies in sync with
+`Source/Core/includes/`.
+
+Known gap, pre-existing: `Shaders/Includes/FXAA.hlsl` includes `Fxaa3_11.h`, which is in neither the repository nor
+the package. FXAA is not used by this mod, so nothing calls it.
