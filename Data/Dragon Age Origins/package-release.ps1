@@ -57,8 +57,11 @@ try {
     Copy-Item (Join-Path $repoRoot "Source\External\NGX\bin\rel\nvngx_dlss.dll") -Destination $pkg -Force
     Copy-Item (Join-Path $repoRoot "Source\External\FidelityFX-API\signedbin\amd_fidelityfx_loader_dx12.dll") -Destination $pkg -Force
     Copy-Item (Join-Path $repoRoot "Source\External\FidelityFX-API\signedbin\amd_fidelityfx_upscaler_dx12.dll") -Destination $pkg -Force
+    # AMD's notice has to travel with the FidelityFX dlls (it is "license.md" in the SDK tree)
+    $ffxLicense = Join-Path $repoRoot "Source\External\FidelityFX-API\license.md"
+    if (-not (Test-Path $ffxLicense)) { throw "FidelityFX license not found at $ffxLicense" }
     New-Item -ItemType Directory -Path (Join-Path $pkg "Licenses") -Force | Out-Null
-    Copy-Item (Join-Path $repoRoot "Source\External\FidelityFX-API\FidelityFX_LICENSE.md") -Destination (Join-Path $pkg "Licenses") -Force -ErrorAction SilentlyContinue
+    Copy-Item $ffxLicense -Destination (Join-Path $pkg "Licenses\FidelityFX_LICENSE.md") -Force
 
     # 3. Guards: nothing from a development run, no user config
     $bad = Get-ChildItem $pkg -Recurse -File | Where-Object {
@@ -66,6 +69,9 @@ try {
         $_.Name -in @("ReShade.ini", "ReShadePreset.ini")
     }
     if ($bad) { throw ("refusing to ship development leftovers: " + (($bad | ForEach-Object { $_.Name }) -join ", ")) }
+    # No empty folders: they only come from a copy that silently missed its source
+    $emptyDirs = Get-ChildItem $pkg -Recurse -Directory | Where-Object { -not (Get-ChildItem $_.FullName -Recurse -File) }
+    if ($emptyDirs) { throw ("refusing to ship empty folders: " + (($emptyDirs | ForEach-Object { $_.Name }) -join ", ")) }
     # Nexus forbids executables in a release zip
     $exe = Get-ChildItem $pkg -Recurse -File -Filter "*.exe"
     if ($exe) { throw ("refusing to ship executables: " + (($exe | ForEach-Object { $_.Name }) -join ", ")) }
