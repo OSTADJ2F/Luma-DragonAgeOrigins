@@ -763,7 +763,7 @@ namespace
       return DXGI_FORMAT_UNKNOWN;
    }
 
-   // TODO: add a strict flag to avoid copying between e.g. UNORM and FLOAT
+   // Whether a byte copy keeps the values
    bool AreFormatsCopyCompatible(DXGI_FORMAT format_a, DXGI_FORMAT format_b)
    {
       auto Is32Bit4ChannelTypeless = [](DXGI_FORMAT format)
@@ -778,6 +778,10 @@ namespace
          return false;
       };
 
+      // Luma upgrades R16G16B16A16_UNORM textures to R16G16B16A16_FLOAT, and D3D11 copies one into the other by byte, reinterpreting the bits
+      // (a typeless format stays compatible, its views decide how it's read)
+      if ((format_a == DXGI_FORMAT_R16G16B16A16_FLOAT && format_b == DXGI_FORMAT_R16G16B16A16_UNORM) || (format_a == DXGI_FORMAT_R16G16B16A16_UNORM && format_b == DXGI_FORMAT_R16G16B16A16_FLOAT))
+         return false;
       format_a = GetTypelessFormat(format_a);
       format_b = GetTypelessFormat(format_b);
       if (format_a == format_b || (Is32Bit4ChannelTypeless(format_a) && Is32Bit4ChannelTypeless(format_b)))
@@ -1042,135 +1046,150 @@ namespace
       return name ? name : "Unknown";
    }
 
-   const char* GetBlendName(D3D11_BLEND blend, bool numerical = false)
+   // The frame capture names the values of both APIs with these (and its panels compare them with "LUMA_D3D"): the D3D11 and D3D12 enums are numbered alike and named alike apart from the prefix
+#if DX11
+#define LUMA_D3D(name) D3D11_##name
+#define LUMA_D3D_ADDRESS(name) D3D11_TEXTURE_ADDRESS_##name
+#else
+#define LUMA_D3D(name) D3D12_##name
+#define LUMA_D3D_ADDRESS(name) D3D12_TEXTURE_ADDRESS_MODE_##name
+#endif
+   const char* GetBlendName(LUMA_D3D(BLEND) blend, bool numerical = false)
    {
       switch (blend)
       {
-      case D3D11_BLEND_ZERO:             return numerical ? "0" : "ZERO";
-      case D3D11_BLEND_ONE:              return numerical ? "1" : "ONE";
-      case D3D11_BLEND_SRC_COLOR:        return "SRC_COLOR";
-      case D3D11_BLEND_INV_SRC_COLOR:    return "INV_SRC_COLOR";
-      case D3D11_BLEND_SRC_ALPHA:        return "SRC_ALPHA";
-      case D3D11_BLEND_INV_SRC_ALPHA:    return "INV_SRC_ALPHA";
-      case D3D11_BLEND_DEST_ALPHA:       return "DEST_ALPHA";
-      case D3D11_BLEND_INV_DEST_ALPHA:   return "INV_DEST_ALPHA";
-      case D3D11_BLEND_DEST_COLOR:       return "DEST_COLOR";
-      case D3D11_BLEND_INV_DEST_COLOR:   return "INV_DEST_COLOR";
-      case D3D11_BLEND_SRC_ALPHA_SAT:    return "SRC_ALPHA_SAT";
-      case D3D11_BLEND_BLEND_FACTOR:     return "BLEND_FACTOR";
-      case D3D11_BLEND_INV_BLEND_FACTOR: return "INV_BLEND_FACTOR";
-      case D3D11_BLEND_SRC1_COLOR:       return "SRC1_COLOR";
-      case D3D11_BLEND_INV_SRC1_COLOR:   return "INV_SRC1_COLOR";
-      case D3D11_BLEND_SRC1_ALPHA:       return "SRC1_ALPHA";
-      case D3D11_BLEND_INV_SRC1_ALPHA:   return "INV_SRC1_ALPHA";
+      case LUMA_D3D(BLEND_ZERO):             return numerical ? "0" : "ZERO";
+      case LUMA_D3D(BLEND_ONE):              return numerical ? "1" : "ONE";
+      case LUMA_D3D(BLEND_SRC_COLOR):        return "SRC_COLOR";
+      case LUMA_D3D(BLEND_INV_SRC_COLOR):    return "INV_SRC_COLOR";
+      case LUMA_D3D(BLEND_SRC_ALPHA):        return "SRC_ALPHA";
+      case LUMA_D3D(BLEND_INV_SRC_ALPHA):    return "INV_SRC_ALPHA";
+      case LUMA_D3D(BLEND_DEST_ALPHA):       return "DEST_ALPHA";
+      case LUMA_D3D(BLEND_INV_DEST_ALPHA):   return "INV_DEST_ALPHA";
+      case LUMA_D3D(BLEND_DEST_COLOR):       return "DEST_COLOR";
+      case LUMA_D3D(BLEND_INV_DEST_COLOR):   return "INV_DEST_COLOR";
+      case LUMA_D3D(BLEND_SRC_ALPHA_SAT):    return "SRC_ALPHA_SAT";
+      case LUMA_D3D(BLEND_BLEND_FACTOR):     return "BLEND_FACTOR";
+      case LUMA_D3D(BLEND_INV_BLEND_FACTOR): return "INV_BLEND_FACTOR";
+#if DX12
+      case D3D12_BLEND_ALPHA_FACTOR:
+         return "ALPHA_FACTOR";
+      case D3D12_BLEND_INV_ALPHA_FACTOR:
+         return "INV_ALPHA_FACTOR";
+#endif
+      case LUMA_D3D(BLEND_SRC1_COLOR):       return "SRC1_COLOR";
+      case LUMA_D3D(BLEND_INV_SRC1_COLOR):   return "INV_SRC1_COLOR";
+      case LUMA_D3D(BLEND_SRC1_ALPHA):       return "SRC1_ALPHA";
+      case LUMA_D3D(BLEND_INV_SRC1_ALPHA):   return "INV_SRC1_ALPHA";
       default:                           return "UNKNOWN";
       }
    }
 
-   const char* GetBlendOpName(D3D11_BLEND_OP blend_op)
+   const char* GetBlendOpName(LUMA_D3D(BLEND_OP) blend_op)
    {
       switch (blend_op)
       {
-      case D3D11_BLEND_OP_ADD:          return "ADD";
-      case D3D11_BLEND_OP_SUBTRACT:     return "SUBTRACT";
-      case D3D11_BLEND_OP_REV_SUBTRACT: return "REV_SUBTRACT";
-      case D3D11_BLEND_OP_MIN:          return "MIN";
-      case D3D11_BLEND_OP_MAX:          return "MAX";
+      case LUMA_D3D(BLEND_OP_ADD):          return "ADD";
+      case LUMA_D3D(BLEND_OP_SUBTRACT):     return "SUBTRACT";
+      case LUMA_D3D(BLEND_OP_REV_SUBTRACT): return "REV_SUBTRACT";
+      case LUMA_D3D(BLEND_OP_MIN):          return "MIN";
+      case LUMA_D3D(BLEND_OP_MAX):          return "MAX";
       default:                          return "UNKNOWN";
       }
    }
 
-   const char* GetBlendOpSigns(D3D11_BLEND_OP blend_op)
+   const char* GetBlendOpSigns(LUMA_D3D(BLEND_OP) blend_op)
    {
       switch (blend_op)
       {
-      case D3D11_BLEND_OP_ADD:          return "+";
-      case D3D11_BLEND_OP_SUBTRACT:     return "-";
-      case D3D11_BLEND_OP_REV_SUBTRACT: return "-";
-      case D3D11_BLEND_OP_MIN:          return "min";
-      case D3D11_BLEND_OP_MAX:          return "max";
+      case LUMA_D3D(BLEND_OP_ADD):          return "+";
+      case LUMA_D3D(BLEND_OP_SUBTRACT):     return "-";
+      case LUMA_D3D(BLEND_OP_REV_SUBTRACT): return "-";
+      case LUMA_D3D(BLEND_OP_MIN):          return "min";
+      case LUMA_D3D(BLEND_OP_MAX):          return "max";
       default:                          return "";
       }
    }
 
-   const char* GetLogicOpName(D3D11_LOGIC_OP logicOp)
+   const char* GetLogicOpName(LUMA_D3D(LOGIC_OP) logicOp)
    {
       switch (logicOp)
       {
-      case D3D11_LOGIC_OP_CLEAR:         return "CLEAR";
-      case D3D11_LOGIC_OP_SET:           return "SET";
-      case D3D11_LOGIC_OP_COPY:          return "COPY";
-      case D3D11_LOGIC_OP_COPY_INVERTED: return "COPY_INVERTED";
-      case D3D11_LOGIC_OP_NOOP:          return "NOOP";
-      case D3D11_LOGIC_OP_INVERT:        return "INVERT";
-      case D3D11_LOGIC_OP_AND:           return "AND";
-      case D3D11_LOGIC_OP_NAND:          return "NAND";
-      case D3D11_LOGIC_OP_OR:            return "OR";
-      case D3D11_LOGIC_OP_NOR:           return "NOR";
-      case D3D11_LOGIC_OP_XOR:           return "XOR";
-      case D3D11_LOGIC_OP_EQUIV:         return "EQUIV";
-      case D3D11_LOGIC_OP_AND_REVERSE:   return "AND_REVERSE";
-      case D3D11_LOGIC_OP_AND_INVERTED:  return "AND_INVERTED";
-      case D3D11_LOGIC_OP_OR_REVERSE:    return "OR_REVERSE";
-      case D3D11_LOGIC_OP_OR_INVERTED:   return "OR_INVERTED";
+      case LUMA_D3D(LOGIC_OP_CLEAR):         return "CLEAR";
+      case LUMA_D3D(LOGIC_OP_SET):           return "SET";
+      case LUMA_D3D(LOGIC_OP_COPY):          return "COPY";
+      case LUMA_D3D(LOGIC_OP_COPY_INVERTED): return "COPY_INVERTED";
+      case LUMA_D3D(LOGIC_OP_NOOP):          return "NOOP";
+      case LUMA_D3D(LOGIC_OP_INVERT):        return "INVERT";
+      case LUMA_D3D(LOGIC_OP_AND):           return "AND";
+      case LUMA_D3D(LOGIC_OP_NAND):          return "NAND";
+      case LUMA_D3D(LOGIC_OP_OR):            return "OR";
+      case LUMA_D3D(LOGIC_OP_NOR):           return "NOR";
+      case LUMA_D3D(LOGIC_OP_XOR):           return "XOR";
+      case LUMA_D3D(LOGIC_OP_EQUIV):         return "EQUIV";
+      case LUMA_D3D(LOGIC_OP_AND_REVERSE):   return "AND_REVERSE";
+      case LUMA_D3D(LOGIC_OP_AND_INVERTED):  return "AND_INVERTED";
+      case LUMA_D3D(LOGIC_OP_OR_REVERSE):    return "OR_REVERSE";
+      case LUMA_D3D(LOGIC_OP_OR_INVERTED):   return "OR_INVERTED";
       default:                           return "UNKNOWN";
       }
    }
 
-   const char* GetFilterName(D3D11_FILTER filter)
+   const char* GetFilterName(LUMA_D3D(FILTER) filter)
    {
       switch (filter)
       {
-      case D3D11_FILTER_MIN_MAG_MIP_POINT:                 return "MIN_MAG_MIP_POINT";
-      case D3D11_FILTER_MIN_MAG_POINT_MIP_LINEAR:          return "MIN_MAG_POINT_MIP_LINEAR";
-      case D3D11_FILTER_MIN_POINT_MAG_LINEAR_MIP_POINT:    return "MIN_POINT_MAG_LINEAR_MIP_POINT";
-      case D3D11_FILTER_MIN_POINT_MAG_MIP_LINEAR:          return "MIN_POINT_MAG_MIP_LINEAR";
-      case D3D11_FILTER_MIN_LINEAR_MAG_MIP_POINT:          return "MIN_LINEAR_MAG_MIP_POINT";
-      case D3D11_FILTER_MIN_LINEAR_MAG_POINT_MIP_LINEAR:   return "MIN_LINEAR_MAG_POINT_MIP_LINEAR";
-      case D3D11_FILTER_MIN_MAG_LINEAR_MIP_POINT:          return "MIN_MAG_LINEAR_MIP_POINT";
-      case D3D11_FILTER_MIN_MAG_MIP_LINEAR:                return "MIN_MAG_MIP_LINEAR";
-      case D3D11_FILTER_ANISOTROPIC:                       return "ANISOTROPIC";
-      case D3D11_FILTER_COMPARISON_MIN_MAG_MIP_POINT:      return "CMP_MIN_MAG_MIP_POINT";
-      case D3D11_FILTER_COMPARISON_MIN_MAG_POINT_MIP_LINEAR: return "CMP_MIN_MAG_POINT_MIP_LINEAR";
-      case D3D11_FILTER_COMPARISON_MIN_POINT_MAG_LINEAR_MIP_POINT: return "CMP_MIN_POINT_MAG_LINEAR_MIP_POINT";
-      case D3D11_FILTER_COMPARISON_MIN_POINT_MAG_MIP_LINEAR: return "CMP_MIN_POINT_MAG_MIP_LINEAR";
-      case D3D11_FILTER_COMPARISON_MIN_LINEAR_MAG_MIP_POINT: return "CMP_MIN_LINEAR_MAG_MIP_POINT";
-      case D3D11_FILTER_COMPARISON_MIN_LINEAR_MAG_POINT_MIP_LINEAR: return "CMP_MIN_LINEAR_MAG_POINT_MIP_LINEAR";
-      case D3D11_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT: return "CMP_MIN_MAG_LINEAR_MIP_POINT";
-      case D3D11_FILTER_COMPARISON_MIN_MAG_MIP_LINEAR:    return "CMP_MIN_MAG_MIP_LINEAR";
-      case D3D11_FILTER_COMPARISON_ANISOTROPIC:           return "CMP_ANISOTROPIC";
-      case D3D11_FILTER_MINIMUM_MIN_MAG_MIP_POINT:        return "MINIMUM_MIN_MAG_MIP_POINT";
-      case D3D11_FILTER_MINIMUM_MIN_MAG_POINT_MIP_LINEAR: return "MINIMUM_MIN_MAG_POINT_MIP_LINEAR";
-      case D3D11_FILTER_MINIMUM_MIN_POINT_MAG_LINEAR_MIP_POINT: return "MINIMUM_MIN_POINT_MAG_LINEAR_MIP_POINT";
-      case D3D11_FILTER_MINIMUM_MIN_POINT_MAG_MIP_LINEAR: return "MINIMUM_MIN_POINT_MAG_MIP_LINEAR";
-      case D3D11_FILTER_MINIMUM_MIN_LINEAR_MAG_MIP_POINT: return "MINIMUM_MIN_LINEAR_MAG_MIP_POINT";
-      case D3D11_FILTER_MINIMUM_MIN_LINEAR_MAG_POINT_MIP_LINEAR: return "MINIMUM_MIN_LINEAR_MAG_POINT_MIP_LINEAR";
-      case D3D11_FILTER_MINIMUM_MIN_MAG_LINEAR_MIP_POINT: return "MINIMUM_MIN_MAG_LINEAR_MIP_POINT";
-      case D3D11_FILTER_MINIMUM_MIN_MAG_MIP_LINEAR:       return "MINIMUM_MIN_MAG_MIP_LINEAR";
-      case D3D11_FILTER_MINIMUM_ANISOTROPIC:              return "MINIMUM_ANISOTROPIC";
-      case D3D11_FILTER_MAXIMUM_MIN_MAG_MIP_POINT:        return "MAXIMUM_MIN_MAG_MIP_POINT";
-      case D3D11_FILTER_MAXIMUM_MIN_MAG_POINT_MIP_LINEAR: return "MAXIMUM_MIN_MAG_POINT_MIP_LINEAR";
-      case D3D11_FILTER_MAXIMUM_MIN_POINT_MAG_LINEAR_MIP_POINT: return "MAXIMUM_MIN_POINT_MAG_LINEAR_MIP_POINT";
-      case D3D11_FILTER_MAXIMUM_MIN_POINT_MAG_MIP_LINEAR: return "MAXIMUM_MIN_POINT_MAG_MIP_LINEAR";
-      case D3D11_FILTER_MAXIMUM_MIN_LINEAR_MAG_MIP_POINT: return "MAXIMUM_MIN_LINEAR_MAG_MIP_POINT";
-      case D3D11_FILTER_MAXIMUM_MIN_LINEAR_MAG_POINT_MIP_LINEAR: return "MAXIMUM_MIN_LINEAR_MAG_POINT_MIP_LINEAR";
-      case D3D11_FILTER_MAXIMUM_MIN_MAG_LINEAR_MIP_POINT: return "MAXIMUM_MIN_MAG_LINEAR_MIP_POINT";
-      case D3D11_FILTER_MAXIMUM_MIN_MAG_MIP_LINEAR:       return "MAXIMUM_MIN_MAG_MIP_LINEAR";
-      case D3D11_FILTER_MAXIMUM_ANISOTROPIC:              return "MAXIMUM_ANISOTROPIC";
+      case LUMA_D3D(FILTER_MIN_MAG_MIP_POINT):                 return "MIN_MAG_MIP_POINT";
+      case LUMA_D3D(FILTER_MIN_MAG_POINT_MIP_LINEAR):          return "MIN_MAG_POINT_MIP_LINEAR";
+      case LUMA_D3D(FILTER_MIN_POINT_MAG_LINEAR_MIP_POINT):    return "MIN_POINT_MAG_LINEAR_MIP_POINT";
+      case LUMA_D3D(FILTER_MIN_POINT_MAG_MIP_LINEAR):          return "MIN_POINT_MAG_MIP_LINEAR";
+      case LUMA_D3D(FILTER_MIN_LINEAR_MAG_MIP_POINT):          return "MIN_LINEAR_MAG_MIP_POINT";
+      case LUMA_D3D(FILTER_MIN_LINEAR_MAG_POINT_MIP_LINEAR):   return "MIN_LINEAR_MAG_POINT_MIP_LINEAR";
+      case LUMA_D3D(FILTER_MIN_MAG_LINEAR_MIP_POINT):          return "MIN_MAG_LINEAR_MIP_POINT";
+      case LUMA_D3D(FILTER_MIN_MAG_MIP_LINEAR):                return "MIN_MAG_MIP_LINEAR";
+      case LUMA_D3D(FILTER_ANISOTROPIC):                       return "ANISOTROPIC";
+      case LUMA_D3D(FILTER_COMPARISON_MIN_MAG_MIP_POINT):      return "CMP_MIN_MAG_MIP_POINT";
+      case LUMA_D3D(FILTER_COMPARISON_MIN_MAG_POINT_MIP_LINEAR): return "CMP_MIN_MAG_POINT_MIP_LINEAR";
+      case LUMA_D3D(FILTER_COMPARISON_MIN_POINT_MAG_LINEAR_MIP_POINT): return "CMP_MIN_POINT_MAG_LINEAR_MIP_POINT";
+      case LUMA_D3D(FILTER_COMPARISON_MIN_POINT_MAG_MIP_LINEAR): return "CMP_MIN_POINT_MAG_MIP_LINEAR";
+      case LUMA_D3D(FILTER_COMPARISON_MIN_LINEAR_MAG_MIP_POINT): return "CMP_MIN_LINEAR_MAG_MIP_POINT";
+      case LUMA_D3D(FILTER_COMPARISON_MIN_LINEAR_MAG_POINT_MIP_LINEAR): return "CMP_MIN_LINEAR_MAG_POINT_MIP_LINEAR";
+      case LUMA_D3D(FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT): return "CMP_MIN_MAG_LINEAR_MIP_POINT";
+      case LUMA_D3D(FILTER_COMPARISON_MIN_MAG_MIP_LINEAR):    return "CMP_MIN_MAG_MIP_LINEAR";
+      case LUMA_D3D(FILTER_COMPARISON_ANISOTROPIC):           return "CMP_ANISOTROPIC";
+      case LUMA_D3D(FILTER_MINIMUM_MIN_MAG_MIP_POINT):        return "MINIMUM_MIN_MAG_MIP_POINT";
+      case LUMA_D3D(FILTER_MINIMUM_MIN_MAG_POINT_MIP_LINEAR): return "MINIMUM_MIN_MAG_POINT_MIP_LINEAR";
+      case LUMA_D3D(FILTER_MINIMUM_MIN_POINT_MAG_LINEAR_MIP_POINT): return "MINIMUM_MIN_POINT_MAG_LINEAR_MIP_POINT";
+      case LUMA_D3D(FILTER_MINIMUM_MIN_POINT_MAG_MIP_LINEAR): return "MINIMUM_MIN_POINT_MAG_MIP_LINEAR";
+      case LUMA_D3D(FILTER_MINIMUM_MIN_LINEAR_MAG_MIP_POINT): return "MINIMUM_MIN_LINEAR_MAG_MIP_POINT";
+      case LUMA_D3D(FILTER_MINIMUM_MIN_LINEAR_MAG_POINT_MIP_LINEAR): return "MINIMUM_MIN_LINEAR_MAG_POINT_MIP_LINEAR";
+      case LUMA_D3D(FILTER_MINIMUM_MIN_MAG_LINEAR_MIP_POINT): return "MINIMUM_MIN_MAG_LINEAR_MIP_POINT";
+      case LUMA_D3D(FILTER_MINIMUM_MIN_MAG_MIP_LINEAR):       return "MINIMUM_MIN_MAG_MIP_LINEAR";
+      case LUMA_D3D(FILTER_MINIMUM_ANISOTROPIC):              return "MINIMUM_ANISOTROPIC";
+      case LUMA_D3D(FILTER_MAXIMUM_MIN_MAG_MIP_POINT):        return "MAXIMUM_MIN_MAG_MIP_POINT";
+      case LUMA_D3D(FILTER_MAXIMUM_MIN_MAG_POINT_MIP_LINEAR): return "MAXIMUM_MIN_MAG_POINT_MIP_LINEAR";
+      case LUMA_D3D(FILTER_MAXIMUM_MIN_POINT_MAG_LINEAR_MIP_POINT): return "MAXIMUM_MIN_POINT_MAG_LINEAR_MIP_POINT";
+      case LUMA_D3D(FILTER_MAXIMUM_MIN_POINT_MAG_MIP_LINEAR): return "MAXIMUM_MIN_POINT_MAG_MIP_LINEAR";
+      case LUMA_D3D(FILTER_MAXIMUM_MIN_LINEAR_MAG_MIP_POINT): return "MAXIMUM_MIN_LINEAR_MAG_MIP_POINT";
+      case LUMA_D3D(FILTER_MAXIMUM_MIN_LINEAR_MAG_POINT_MIP_LINEAR): return "MAXIMUM_MIN_LINEAR_MAG_POINT_MIP_LINEAR";
+      case LUMA_D3D(FILTER_MAXIMUM_MIN_MAG_LINEAR_MIP_POINT): return "MAXIMUM_MIN_MAG_LINEAR_MIP_POINT";
+      case LUMA_D3D(FILTER_MAXIMUM_MIN_MAG_MIP_LINEAR):       return "MAXIMUM_MIN_MAG_MIP_LINEAR";
+      case LUMA_D3D(FILTER_MAXIMUM_ANISOTROPIC):              return "MAXIMUM_ANISOTROPIC";
       default: return "UNKNOWN";
       }
    }
 
-   const char* GetTextureAddressModeName(D3D11_TEXTURE_ADDRESS_MODE mode)
+   const char* GetTextureAddressModeName(LUMA_D3D(TEXTURE_ADDRESS_MODE) mode)
    {
       switch (mode)
       {
-      case D3D11_TEXTURE_ADDRESS_WRAP:   return "WRAP";
-      case D3D11_TEXTURE_ADDRESS_MIRROR: return "MIRROR";
-      case D3D11_TEXTURE_ADDRESS_CLAMP:  return "CLAMP";
-      case D3D11_TEXTURE_ADDRESS_BORDER: return "BORDER";
-      case D3D11_TEXTURE_ADDRESS_MIRROR_ONCE: return "MIRROR_ONCE";
+      case LUMA_D3D_ADDRESS(WRAP):   return "WRAP";
+      case LUMA_D3D_ADDRESS(MIRROR): return "MIRROR";
+      case LUMA_D3D_ADDRESS(CLAMP):  return "CLAMP";
+      case LUMA_D3D_ADDRESS(BORDER): return "BORDER";
+      case LUMA_D3D_ADDRESS(MIRROR_ONCE): return "MIRROR_ONCE";
       default: return "UNKNOWN";
       }
    }
+#undef LUMA_D3D_ADDRESS
 }

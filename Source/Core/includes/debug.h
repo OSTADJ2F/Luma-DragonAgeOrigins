@@ -182,3 +182,54 @@ namespace
 #else
 #define ensure(always_keep, discard_if_ndebug) (assert(always_keep discard_if_ndebug))
 #endif
+
+#if DEVELOPMENT
+// Needs to match in shader
+enum class DebugDrawTextureOptionsMask : uint32_t
+{
+   None = 0,
+   Fullscreen = 1 << 0,
+   RenderResolutionScale = 1 << 1,
+   ShowAlpha = 1 << 2,
+   PreMultiplyAlpha = 1 << 3,
+   InvertColors = 1 << 4,
+   LinearToGamma = 1 << 5,
+   GammaToLinear = 1 << 6,
+   FlipY = 1 << 7,
+   Saturate = 1 << 8,
+   RedOnly = 1 << 9,
+   BackgroundPassthrough = 1 << 10,
+   TextureMultiSample = 1 << 11,
+   TextureArray = 1 << 12,
+   // If this is true and Texture3D is also true, the texture is a cube. If both are false it's 1D.
+   Texture2D = 1 << 13,
+   Texture3D = 1 << 14,
+   Abs = 1 << 15,
+   Zoom4x = 1 << 16,
+   Bilinear = 1 << 17,
+   Tonemap = 1 << 18,
+   SRGB = 1 << 19,
+   UVToPixelSpace = 1 << 20,
+   Denormalize = 1 << 21,
+   // The texture is an R8_UINT one (the stencil plane), a plain 2D at t9 of the display composition (D3D12 only): loaded as integers and shown as value / 255
+   TextureUint = 1 << 22,
+};
+enum class DebugDrawMode : uint32_t
+{
+   Custom,
+   // TODO: rename all of these to "View", or not
+   RenderTarget,
+   UnorderedAccessView,
+   ShaderResource,
+   Depth,
+   Stencil,
+};
+static constexpr const char* debug_draw_mode_strings[] = {
+   "Custom",
+   "Render Target",
+   "Unordered Access View",
+   "Shader Resource",
+   "Depth",
+   "Stencil",
+};
+#endif

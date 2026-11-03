@@ -454,6 +454,7 @@ bool ResourceUpgradeManager::FindOrCreateIndirectUpgradedResource(
          if (!original_resources_to_mirrored_upgraded_resources.contains(in_resource))
          {
             original_resources_to_mirrored_upgraded_resources[in_resource] = IndirectUpgradedResource{ mirrored_upgraded_resource.handle, needs_scale, original_width, original_height, target_desc.texture.width, target_desc.texture.height };
+            any_mirror.store(true, std::memory_order_release);
             out_resource = mirrored_upgraded_resource.handle;
 
             // TODO: optionally copy the content of "in_resource"?
@@ -712,9 +713,7 @@ void ResourceUpgradeManager::OnResourceDestroyed(uint64_t resource_handle)
 #endif
    }
    upgraded_resources.erase(resource_handle);
-#if DEVELOPMENT
    original_upgraded_resources_formats.erase(resource_handle);
-#endif
 }
 
 // Lock-free: caller/core.hpp holds the single device mutex.

@@ -22,31 +22,14 @@ static const float3x3 IdentityMatrix = float3x3(
     0.0f, 1.0f, 0.0f,
     0.0f, 0.0f, 1.0f);
 
-// HLSL 2021 added select(), but DX11 shaders are compiled with FXC/HLSL 2015.
-// Keep these overloads out of DXC builds whose language version already provides the intrinsic.
+// HLSL 2021 added select(), and() and or(), but DX11 shaders are compiled with FXC/HLSL 2015.
+// Keep these out of DXC builds whose language version already provides the intrinsics.
+// Macros of fxc's plain vector ?:, && and || (per component, both sides evaluated, as the intrinsics) rather than overloaded functions: the call sites
+// then compile to the bytecode of the operators they replace, which the functions didn't (fxc made other flatten/branch choices in 25 game shaders).
 #if !defined(__HLSL_VERSION) || __HLSL_VERSION < 2021
-float select(bool condition, float trueValue, float falseValue)
-{
-  return condition ? trueValue : falseValue;
-}
-float2 select(bool2 condition, float2 trueValue, float2 falseValue)
-{
-  return float2(condition.x ? trueValue.x : falseValue.x,
-                condition.y ? trueValue.y : falseValue.y);
-}
-float3 select(bool3 condition, float3 trueValue, float3 falseValue)
-{
-  return float3(condition.x ? trueValue.x : falseValue.x,
-                condition.y ? trueValue.y : falseValue.y,
-                condition.z ? trueValue.z : falseValue.z);
-}
-float4 select(bool4 condition, float4 trueValue, float4 falseValue)
-{
-  return float4(condition.x ? trueValue.x : falseValue.x,
-                condition.y ? trueValue.y : falseValue.y,
-                condition.z ? trueValue.z : falseValue.z,
-                condition.w ? trueValue.w : falseValue.w);
-}
+#define select(condition, trueValue, falseValue) ((condition) ? (trueValue) : (falseValue))
+#define and(a, b)                                ((a) && (b))
+#define or(a, b)                                 ((a) || (b))
 #endif
 
 float average(float3 color)
@@ -165,15 +148,15 @@ float Sign_Fast(float x)
 }
 float2 Sign_Fast(float2 x)
 {
-  return x >= 0.0 ? 1.0 : -1.0;
+  return select(x >= 0.0, 1.0, -1.0);
 }
 float3 Sign_Fast(float3 x)
 {
-  return x >= 0.0 ? 1.0 : -1.0;
+  return select(x >= 0.0, 1.0, -1.0);
 }
 float4 Sign_Fast(float4 x)
 {
-  return x >= 0.0 ? 1.0 : -1.0;
+  return select(x >= 0.0, 1.0, -1.0);
 }
 
 // Builds +1.0 or -1.0 by copying x's sign bit into 1.0f

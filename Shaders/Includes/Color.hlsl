@@ -924,7 +924,7 @@ float3 EmulateShadowOffset(float3 Color, float3 Offset, bool LinearInOut = true,
 	// For the negative case, we might do a sqr, otherwise the result would flatten itself to 0 for the whole range if range was 1,
 	// and even if it wasn't, it'd generate negative values for an input of >= 0. Update: somehow doing "sqr" there breaks, so leave it "linear" (it doesn't seem to flatten either, likely because of the "range" making alpha smaller).
 	if (!LinearInOut)
-		alpha = Offset >= 0.0 ? sqrt(alpha) : alpha;
+		alpha = select(Offset >= 0.0, sqrt(alpha), alpha);
 
 	// If levels go too high, force apply them anyway
 	if (SmoothOutLargeOffsets)

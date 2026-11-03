@@ -1131,7 +1131,7 @@ float3 SampleLUTWithExtrapolation(LUT_TEXTURE_TYPE lut, SamplerState samplerStat
 		else //if (settings.extrapolationQuality >= 1)
 		{
       // We always run the UV centering logic in the vanilla transfer function space (e.g. sRGB), not PQ, as all these transfer functions are reliable enough within the 0-1 range.
-			float3 centeredUV = clampedUV + (backwardsAmount * (clampedUV >= 0.5 ? -1 : 1));
+			float3 centeredUV = clampedUV + (backwardsAmount * select(clampedUV >= 0.5, -1, 1));
 			float3 centeredSamples[3] = { clampedSample, clampedSample, clampedSample };
 			float3 centeredSamples_PQ[3] = { clampedSample_PQ, clampedSample_PQ, clampedSample_PQ };
 		  const float3 clampedSample_UCS = DarktableUcs::RGBToUCSLUV(clampedSample);
@@ -1140,11 +1140,11 @@ float3 SampleLUTWithExtrapolation(LUT_TEXTURE_TYPE lut, SamplerState samplerStat
 #if 1
       const bool secondSampleLessCentered = backwardsAmount > (0.25 + FLT_EPSILON);
 			const float backwardsAmount_2 = secondSampleLessCentered ? (backwardsAmount / 2) : (backwardsAmount * 2); // Go in the most sensible direction
-			float3 centeredUV_2 = clampedUV + (backwardsAmount_2 * (clampedUV >= 0.5 ? -1 : 1));
+			float3 centeredUV_2 = clampedUV + (backwardsAmount_2 * select(clampedUV >= 0.5, -1, 1));
 #else // This might be more accurate, though it might be more aggressive, and fails to extrapolate properly in case the user set "backwardsAmount" was too close to "lutTexelRange", or if the LUT clipped to the max value before its edges.
       const bool secondSampleLessCentered = backwardsAmount > lutTexelRange;
 			const float backwardsAmount_2 = secondSampleLessCentered ? lutTexelRange : (backwardsAmount * 2);
-			float3 centeredUV_2 = clampedUV + (backwardsAmount_2 * (clampedUV >= 0.5 ? -1 : 1));
+			float3 centeredUV_2 = clampedUV + (backwardsAmount_2 * select(clampedUV >= 0.5, -1, 1));
 #endif
 			float3 centeredSamples_2[3] = { clampedSample, clampedSample, clampedSample };
 			float3 centeredSamples_PQ_2[3] = { clampedSample_PQ, clampedSample_PQ, clampedSample_PQ };
@@ -1623,7 +1623,7 @@ float3 Find1DLUTClippingEdge(Texture2D<float4> lut, const uint lutSize, float ma
   bool wasLast = i == searchEnd;
   if (wasLast)
   {
-    lutEdge = foundEdges ? lutEdge : (backwards ? min(i, lutMax) : max(i, 0));
+    lutEdge = select(foundEdges, lutEdge, (backwards ? min(i, lutMax) : max(i, 0)));
   }
 
   return float3(lutEdge) / float(lutMax);
@@ -1659,7 +1659,7 @@ float4 Sample1DLUTWithSmoothing(Texture2D<float4> lut, const float lutMax, float
   float4 smoothingIntensity = 1.0; // Expose if necessary (as a single float)
 
   // Disable smoothing around edges, we'd average the edge value with the texel after it (the more central one), which mean 0/black would get raised and 1/white would get lowered.
-  smoothingIntensity.rgb = (inputTexelFloored <= 0 || inputTexelFloored >= (lutMaxI - 1)) ? 0.0 : smoothingIntensity.rgb;
+  smoothingIntensity.rgb = select(or(inputTexelFloored <= 0, inputTexelFloored >= (lutMaxI - 1)), 0.0, smoothingIntensity.rgb);
 
   float4 colors[4];
 
@@ -1822,7 +1822,7 @@ float4 Sample1DLUTWithExtrapolation(Texture2D<float4> lut, SamplerState linearSa
 
     float3 centeredColor = unclampedColor;
     // Don't go backwards more than the center, or it'd get messy (we shouldn't even be here if that would have happened)
-    centeredColor = clampedColor >= 0.5 ? max(clampedColor - backwardsAmount, 0.5) : min(clampedColor + backwardsAmount, 0.5);
+    centeredColor = select(clampedColor >= 0.5, max(clampedColor - backwardsAmount, 0.5), min(clampedColor + backwardsAmount, 0.5));
 
     float4 centeredSample;
     // No need to use "Sample1DLUTWithSmoothing" here, it's barely make any difference, and possibly would be less accurate
@@ -1844,7 +1844,7 @@ float4 Sample1DLUTWithExtrapolation(Texture2D<float4> lut, SamplerState linearSa
       centeredSample.a = 1.0;
     }
     const float3 distanceFromClampedToCentered = abs(clampedColor - centeredColor);
-    const float3 extrapolationRatio = (!uvOutOfRange || distanceFromClampedToCentered == 0.0) ? 0.0 : (distanceFromUnclampedToClamped / distanceFromClampedToCentered);
+    const float3 extrapolationRatio = select(or(!uvOutOfRange, distanceFromClampedToCentered == 0.0), 0.0, distanceFromUnclampedToClamped / distanceFromClampedToCentered);
     const float4 extrapolationRatio4 = singleChannelInput ? extrapolationRatio.r : float4(extrapolationRatio.rgb, 0.0);
     const float4 extrapolatedColor = lerp(centeredSample, clampedSample, 1.0 + extrapolationRatio4); // Extrapolate individually on every each channel (it couldn't really be otherwise, 1D LUTs don't have any cross pollution between channels)
     finalColor = extrapolatedColor;

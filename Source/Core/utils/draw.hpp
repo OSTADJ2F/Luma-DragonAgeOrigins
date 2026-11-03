@@ -2,6 +2,7 @@
 
 #include "../texture_data/SMAA_AreaTex.h"
 #include "../texture_data/SMAA_SearchTex.h"
+#include "../texture_data/SMAA_AreaTex_SharpU.h"
 
 #include "../includes/callbacks.h"
 #include "../includes/math.h"
@@ -59,9 +60,6 @@ struct DrawStateStack
             }
             state->depth_stencil_view.reset();
             device_context->OMGetRenderTargetsAndUnorderedAccessViews(state->valid_render_target_views_bound, &state->render_target_views[0], &state->depth_stencil_view, state->valid_render_target_views_bound, state->uav_num - state->valid_render_target_views_bound, &state->unordered_access_views[0]);
-#if ENABLE_DRAW_STATE_VERTEX_BUFFER_CACHE
-            device_context->IAGetVertexBuffers(0, D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT, &state->vertex_buffers[0], state->vertex_buffer_strides, state->vertex_buffer_offsets);
-#endif // ENABLE_DRAW_STATE_VERTEX_BUFFER_CACHE
          }
          device_context->OMGetBlendState(&state->blend_state, state->blend_factor, &state->blend_sample_mask);
          device_context->IAGetPrimitiveTopology(&state->primitive_topology);
@@ -155,13 +153,6 @@ struct DrawStateStack
          }
          device_context->OMSetBlendState(state->blend_state.get(), state->blend_factor, state->blend_sample_mask);
          device_context->IASetPrimitiveTopology(state->primitive_topology);
-#if ENABLE_DRAW_STATE_VERTEX_BUFFER_CACHE
-         if constexpr (Mode == DrawStateStackType::FullGraphics)
-         {
-            ID3D11Buffer* const* vertex_buffers_const = (ID3D11Buffer**)std::addressof(state->vertex_buffers[0]);
-            device_context->IASetVertexBuffers(0, D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT, vertex_buffers_const, state->vertex_buffer_strides, state->vertex_buffer_offsets);
-         }
-#endif // ENABLE_DRAW_STATE_VERTEX_BUFFER_CACHE
          device_context->RSSetScissorRects(state->scissor_rects_num, &state->scissor_rects[0]);
          device_context->RSSetViewports(state->viewports_num, &state->viewports[0]);
          ID3D11ShaderResourceView* const* srvs_const = (ID3D11ShaderResourceView**)std::addressof(state->shader_resource_views[0]); // We can't use "com_ptr"'s "T **operator&()" as it asserts if the object isn't null, even if the reference would be const
@@ -332,11 +323,6 @@ struct DrawStateStack
       D3D11_VIEWPORT viewports[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE];
       UINT viewports_num = 1;
       com_ptr<ID3D11InputLayout> input_layout;
-#if ENABLE_DRAW_STATE_VERTEX_BUFFER_CACHE
-      com_ptr<ID3D11Buffer> vertex_buffers[D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT];
-      UINT vertex_buffer_strides[D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT] = {};
-      UINT vertex_buffer_offsets[D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT] = {};
-#endif // ENABLE_DRAW_STATE_VERTEX_BUFFER_CACHE
       com_ptr<ID3D11RasterizerState> rasterizer_state;
       UINT valid_render_target_views_bound = 0; // Includes null ones as well if bound between valid RTVs
       UINT uav_num = D3D11_1_UAV_SLOT_COUNT;
@@ -346,8 +332,608 @@ struct DrawStateStack
    std::unique_ptr<State> state;
 };
 
-// Fullscreen (full render target) pass
-void DrawCustomPixelShader(ID3D11DeviceContext* device_context, ID3D11DepthStencilState* depth_stencil_state, ID3D11BlendState* blend_state, ID3D11SamplerState* sampler_state, ID3D11VertexShader* vs, ID3D11PixelShader* ps, ID3D11ShaderResourceView* source_resource_texture_view, ID3D11RenderTargetView* target_resource_texture_view, UINT width, UINT height, bool alpha = true, const char* trace_name = nullptr)
+#if DEVELOPMENT
+// Expects mutexes to already be locked
+void AddTraceDrawCallData(std::vector<TraceDrawCallData>& trace_draw_calls_data, const DeviceData& device_data, ID3D11DeviceContext* native_device_context, uint64_t pipeline_handle,
+   std::unordered_map<uint32_t, CachedShader*>& shader_cache, const DrawDispatchData& draw_dispatch_data, std::unordered_map<uint64_t, uint64_t> mirrored_rvs_redirector)
+{
+   TraceDrawCallData trace_draw_call_data;
+
+#if 1
+   trace_draw_call_data.pipeline_handle = pipeline_handle;
+#else
+   trace_draw_call_data.shader_hashes = shader_hash;
+   trace_draw_call_data.pipeline_handles.push_back(pipeline_handle);
+#endif
+
+   trace_draw_call_data.command_list = native_device_context;
+
+   // Query D3D11.1 context once for the whole function (used to retrieve CB partial-binding offsets)
+   com_ptr<ID3D11DeviceContext1> device_context_1;
+   native_device_context->QueryInterface(&device_context_1);
+
+   // In case we redirected resource views (indirect texture upgrades), force print back the original one here,
+   // the upgraded one will be visible in the lists anyway
+   auto RedirectMirroredRVS = [&]<typename T>(T* ptr) -> T*
+   {
+      uint64_t handle = reinterpret_cast<uint64_t>(ptr);
+      for (const auto& [key, value] : mirrored_rvs_redirector)
+      {
+         if (value == handle)
+            return reinterpret_cast<T*>(key);
+      }
+      return ptr;
+   };
+   auto FlagUpgradedResources = [&](auto* rv, TraceDrawCallData::DepthStateType depth_state = TraceDrawCallData::DepthStateType::Invalid, TraceDrawCallData::DepthStateType stencil_state = TraceDrawCallData::DepthStateType::Invalid)
+   {
+      com_ptr<ID3D11Resource> resource;
+      if (rv)
+      {
+         rv->GetResource(&resource);
+
+         const bool upgraded = device_data.resource_upgrades.original_resources_to_mirrored_upgraded_resources.contains((uint64_t)resource.get()) || device_data.resource_upgrades.upgraded_resources.contains((uint64_t)resource.get()) || (/*swapchain_upgrade_type > SwapchainUpgradeType::None &&*/ device_data.back_buffers.contains((uint64_t)resource.get())); // TODO: expose "swapchain_upgrade_type" here or something like that
+         const bool scaled = [&]() {
+            auto it = device_data.resource_upgrades.original_resources_to_mirrored_upgraded_resources.find((uint64_t)resource.get());
+            return it != device_data.resource_upgrades.original_resources_to_mirrored_upgraded_resources.end() && it->second.is_scaled;
+         }();
+
+         using ViewType = std::remove_pointer_t<decltype(rv)>;
+         if constexpr (std::is_same_v<ViewType, ID3D11ShaderResourceView>)
+         {
+            trace_draw_call_data.any_input_resources_format_upgraded |= upgraded;
+            trace_draw_call_data.any_input_resources_scaled |= scaled;
+         }
+         else if constexpr (std::is_same_v<ViewType, ID3D11RenderTargetView>)
+         {
+            trace_draw_call_data.any_output_resources_format_upgraded |= upgraded;
+            trace_draw_call_data.any_output_resources_scaled |= scaled;
+         }
+         else if constexpr (std::is_same_v<ViewType, ID3D11UnorderedAccessView>)
+         {
+            trace_draw_call_data.any_input_resources_format_upgraded |= upgraded;
+            trace_draw_call_data.any_output_resources_format_upgraded |= upgraded;
+            trace_draw_call_data.any_input_resources_scaled |= scaled;
+            trace_draw_call_data.any_output_resources_scaled |= scaled;
+         }
+         else if constexpr (std::is_same_v<ViewType, ID3D11DepthStencilView>)
+         {
+            if (depth_state == TraceDrawCallData::DepthStateType::TestOnly ||
+                depth_state == TraceDrawCallData::DepthStateType::TestAndWrite ||
+                stencil_state == TraceDrawCallData::DepthStateType::TestOnly ||
+                stencil_state == TraceDrawCallData::DepthStateType::TestAndWrite)
+            {
+               trace_draw_call_data.any_input_resources_format_upgraded |= upgraded;
+               trace_draw_call_data.any_input_resources_scaled |= scaled;
+            }
+            if (depth_state == TraceDrawCallData::DepthStateType::WriteOnly ||
+               depth_state == TraceDrawCallData::DepthStateType::TestAndWrite ||
+               stencil_state == TraceDrawCallData::DepthStateType::WriteOnly ||
+               stencil_state == TraceDrawCallData::DepthStateType::TestAndWrite)
+            {
+               trace_draw_call_data.any_output_resources_format_upgraded |= upgraded;
+               trace_draw_call_data.any_output_resources_scaled |= scaled;
+            }
+         }
+      }
+   };
+
+   // Note that the pipelines can be run more than once so this will return the first one matching (there's only one actually, we don't have separate settings for their running instance, as that's runtime stuff)
+   const auto pipeline_pair = device_data.pipeline_cache_by_pipeline_handle.find(pipeline_handle);
+   const bool is_valid = pipeline_pair != device_data.pipeline_cache_by_pipeline_handle.end() && pipeline_pair->second != nullptr;
+   if (is_valid)
+   {
+      // Expose if needed
+      constexpr bool show_unused_bound_resources = false; // If a resource is bound but not read/written to by the shader (this often happens with SRVs and UAVs, rarely with RTVs, given they almost 1:1 match with the shader)
+      constexpr bool show_used_unbound_resources = true; // If a resource is not bound (null) but it is read/written to by the shader (which will result in black on read, and nothing on writes)
+      // Note that in DX11, some resources might be inherited by the main device context when merging an async device context to the main one, and we couldn't see them yet. Most games don't seem to rely on that.
+
+      const auto pipeline = pipeline_pair->second;
+      const CachedShader* cached_shader = (!pipeline->shader_hashes.empty() && shader_cache.contains(pipeline->shader_hashes[0])) ? shader_cache[pipeline->shader_hashes[0]] : nullptr; // DX10/11 exclusive behaviour
+      assert(cached_shader);
+      trace_draw_call_data.draw_dispatch_data = draw_dispatch_data;
+      if (!pipeline->HasComputeShader())
+         native_device_context->IAGetPrimitiveTopology(&trace_draw_call_data.primitive_topology);
+      if (pipeline->HasPixelShader())
+      {
+         // The first call gets the number of bound rects/viewports
+         native_device_context->RSGetScissorRects(&trace_draw_call_data.scissor_count, nullptr);
+         native_device_context->RSGetScissorRects(&trace_draw_call_data.scissor_count, trace_draw_call_data.scissor_rects);
+
+         native_device_context->RSGetViewports(&trace_draw_call_data.viewport_count, nullptr);
+         native_device_context->RSGetViewports(&trace_draw_call_data.viewport_count, trace_draw_call_data.viewports);
+
+         com_ptr<ID3D11RasterizerState> rasterizer_state;
+         native_device_context->RSGetState(&rasterizer_state);
+         trace_draw_call_data.has_rasterizer_state = rasterizer_state.get() != nullptr;
+         if (rasterizer_state)
+         {
+            rasterizer_state->GetDesc(&trace_draw_call_data.rasterizer_desc);
+         }
+
+         com_ptr<ID3D11RenderTargetView> rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
+         com_ptr<ID3D11UnorderedAccessView> uavs[D3D11_1_UAV_SLOT_COUNT];
+         com_ptr<ID3D11DepthStencilView> dsv;
+         native_device_context->OMGetRenderTargetsAndUnorderedAccessViews(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, &rtvs[0], &dsv, 0, device_data.uav_max_count, &uavs[0]);
+         dsv = RedirectMirroredRVS(dsv.get());
+
+         com_ptr<ID3D11DepthStencilState> depth_stencil_state;
+         UINT stencil_ref;
+         native_device_context->OMGetDepthStencilState(&depth_stencil_state, &stencil_ref);
+         trace_draw_call_data.stencil_ref = stencil_ref;
+         if (depth_stencil_state)
+         {
+            D3D11_DEPTH_STENCIL_DESC depth_stencil_desc;
+            depth_stencil_state->GetDesc(&depth_stencil_desc);
+            trace_draw_call_data.has_depth_stencil_state = true;
+            trace_draw_call_data.depth_stencil_desc = depth_stencil_desc;
+
+            D3D11_DEPTH_STENCIL_VIEW_DESC dsv_desc = {};
+            if (dsv.get())
+            {
+               dsv->GetDesc(&dsv_desc);
+            }
+
+            if (depth_stencil_desc.DepthEnable)
+            {
+               if (dsv.get())
+               {
+                  if (depth_stencil_desc.DepthWriteMask == D3D11_DEPTH_WRITE_MASK_ZERO)
+                  {
+                     // For now we ignore the "D3D11_COMPARISON_NEVER" as realistically it should never be used
+                     if (depth_stencil_desc.DepthFunc != D3D11_COMPARISON_ALWAYS)
+                     {
+                        trace_draw_call_data.depth_state = TraceDrawCallData::DepthStateType::TestOnly;
+                     }
+                     // We neither read nor write the depth, so it's essentially disabled
+                     else
+                     {
+                        trace_draw_call_data.depth_state = TraceDrawCallData::DepthStateType::Disabled;
+                     }
+                  }
+                  else //if (depth_stencil_desc.DepthWriteMask == D3D11_DEPTH_WRITE_MASK_ALL) // Implied
+                  {
+                     if (depth_stencil_desc.DepthFunc != D3D11_COMPARISON_ALWAYS)
+                     {
+                        trace_draw_call_data.depth_state = TraceDrawCallData::DepthStateType::TestAndWrite;
+                     }
+                     else
+                     {
+                        trace_draw_call_data.depth_state = TraceDrawCallData::DepthStateType::WriteOnly;
+                     }
+                  }
+               }
+               // Depth texture is missing, unknown consequence
+               else
+               {
+                  trace_draw_call_data.depth_state = TraceDrawCallData::DepthStateType::Invalid;
+               }
+            }
+
+            bool has_valid_stencil_dsv = dsv.get() && (dsv_desc.Format == DXGI_FORMAT_D24_UNORM_S8_UINT || dsv_desc.Format == DXGI_FORMAT_D32_FLOAT_S8X24_UINT);
+            bool any_stencil_pass_op_writes = depth_stencil_desc.FrontFace.StencilFailOp != D3D11_STENCIL_OP_KEEP || depth_stencil_desc.FrontFace.StencilDepthFailOp != D3D11_STENCIL_OP_KEEP || depth_stencil_desc.FrontFace.StencilPassOp != D3D11_STENCIL_OP_KEEP || depth_stencil_desc.BackFace.StencilFailOp != D3D11_STENCIL_OP_KEEP || depth_stencil_desc.BackFace.StencilDepthFailOp != D3D11_STENCIL_OP_KEEP || depth_stencil_desc.BackFace.StencilPassOp != D3D11_STENCIL_OP_KEEP; // Note: "D3D11_STENCIL_OP_KEEP" isn't 0, so it's possitive that 0 is also treated as "NOP"
+            bool any_stencil_func_tests = depth_stencil_desc.FrontFace.StencilFunc != D3D11_COMPARISON_ALWAYS || depth_stencil_desc.BackFace.StencilFunc != D3D11_COMPARISON_ALWAYS;
+            
+            bool stencil_enabled_write = depth_stencil_desc.StencilEnable && has_valid_stencil_dsv && depth_stencil_desc.StencilWriteMask != 0 && any_stencil_pass_op_writes;
+            bool stencil_enabled_read = depth_stencil_desc.StencilEnable && has_valid_stencil_dsv && depth_stencil_desc.StencilReadMask != 0 && any_stencil_func_tests; // "stencil_ref" doesn't really tell us anything regarding read/write
+            if (stencil_enabled_read && stencil_enabled_write)
+            {
+               trace_draw_call_data.stencil_state = TraceDrawCallData::DepthStateType::TestAndWrite;
+            }
+            else if (stencil_enabled_read)
+            {
+               trace_draw_call_data.stencil_state = TraceDrawCallData::DepthStateType::TestOnly;
+            }
+            else if (stencil_enabled_write)
+            {
+               trace_draw_call_data.stencil_state = TraceDrawCallData::DepthStateType::WriteOnly;
+            }
+
+            if ((trace_draw_call_data.depth_state != TraceDrawCallData::DepthStateType::Disabled && trace_draw_call_data.depth_state != TraceDrawCallData::DepthStateType::Invalid)
+               || (trace_draw_call_data.stencil_state != TraceDrawCallData::DepthStateType::Disabled && trace_draw_call_data.stencil_state != TraceDrawCallData::DepthStateType::Invalid))
+            {
+               trace_draw_call_data.dsv_format = dsv_desc.Format;
+               ASSERT_ONCE(dsv_desc.Format != DXGI_FORMAT_UNKNOWN); // Unexpected?
+
+               FlagUpgradedResources(dsv.get(), trace_draw_call_data.depth_state, trace_draw_call_data.stencil_state);
+
+               com_ptr<ID3D11Resource> ds_resource;
+               dsv->GetResource(&ds_resource);
+               uint4 ds_size = {};
+               GetResourceInfo(ds_resource.get(), ds_size, trace_draw_call_data.ds_format, nullptr, &trace_draw_call_data.ds_hash, &trace_draw_call_data.ds_debug_name);
+
+               trace_draw_call_data.ds_size.x = ds_size.x;
+               trace_draw_call_data.ds_size.y = ds_size.y;
+            }
+         }
+
+         com_ptr<ID3D11BlendState> blend_state;
+         native_device_context->OMGetBlendState(&blend_state, trace_draw_call_data.blend_factor, nullptr);
+         if (blend_state)
+         {
+            com_ptr<ID3D11BlendState1> blend_state_1;
+            blend_state->QueryInterface(&blend_state_1);
+            // We always cache the last one used by the pipeline, hopefully it didn't change between draw calls
+            D3D11_BLEND_DESC1 blend_desc_1 = {};
+            if (blend_state_1)
+            {
+               blend_state_1->GetDesc1(&blend_desc_1);
+            }
+            else
+            {
+               D3D11_BLEND_DESC blend_desc;
+               blend_state->GetDesc(&blend_desc);
+               blend_desc_1.AlphaToCoverageEnable = blend_desc.AlphaToCoverageEnable;
+               blend_desc_1.IndependentBlendEnable = blend_desc.IndependentBlendEnable;
+               for (UINT i = 0; i < D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT; ++i)
+               {
+                  // The other parameters stay defaulted
+                  blend_desc_1.RenderTarget[i].BlendEnable           = blend_desc.RenderTarget[i].BlendEnable;
+                  blend_desc_1.RenderTarget[i].SrcBlend              = blend_desc.RenderTarget[i].SrcBlend;
+                  blend_desc_1.RenderTarget[i].DestBlend             = blend_desc.RenderTarget[i].DestBlend;
+                  blend_desc_1.RenderTarget[i].BlendOp               = blend_desc.RenderTarget[i].BlendOp;
+                  blend_desc_1.RenderTarget[i].SrcBlendAlpha         = blend_desc.RenderTarget[i].SrcBlendAlpha;
+                  blend_desc_1.RenderTarget[i].DestBlendAlpha        = blend_desc.RenderTarget[i].DestBlendAlpha;
+                  blend_desc_1.RenderTarget[i].BlendOpAlpha          = blend_desc.RenderTarget[i].BlendOpAlpha;
+                  blend_desc_1.RenderTarget[i].RenderTargetWriteMask = blend_desc.RenderTarget[i].RenderTargetWriteMask;
+               }
+            }
+            trace_draw_call_data.blend_desc = blend_desc_1;
+            // We don't care for the alpha blend operation (source alpha * dest alpha) as alpha is never read back from destination
+         }
+
+         for (UINT i = 0; i < D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT && i < TraceDrawCallData::rtvs_size; i++)
+         {
+            if ((rtvs[i] != nullptr || (show_used_unbound_resources && cached_shader->rtvs[i])) && (show_unused_bound_resources || cached_shader->rtvs[i]))
+            {
+               rtvs[i] = RedirectMirroredRVS(rtvs[i].get());
+               trace_draw_call_data.rtvs[i] = reinterpret_cast<uint64_t>(rtvs[i].get());
+
+               D3D11_RENDER_TARGET_VIEW_DESC rtv_desc = {};
+               rtv_desc.Format = DXGI_FORMAT(-1);
+               if (rtvs[i])
+               {
+                  rtvs[i]->GetDesc(&rtv_desc);
+                  ASSERT_ONCE(rtv_desc.Format != DXGI_FORMAT_UNKNOWN); // Unexpected?
+               }
+               trace_draw_call_data.rtv_format[i] = rtv_desc.Format;
+               com_ptr<ID3D11Resource> rt_resource;
+               if (rtvs[i])
+               {
+                  rtvs[i]->GetResource(&rt_resource);
+                  ASSERT_ONCE(rt_resource != nullptr); // Could happen
+               }
+               FlagUpgradedResources(rtvs[i].get());
+               if (rt_resource)
+               {
+                  // If any of the set RTs are the swapchain, set it to true
+                  trace_draw_call_data.rt_is_swapchain[i] |= device_data.back_buffers.contains((uint64_t)rt_resource.get());
+                  GetResourceInfo(rt_resource.get(), trace_draw_call_data.rt_size[i], trace_draw_call_data.rt_format[i], &trace_draw_call_data.rt_type_name[i], &trace_draw_call_data.rt_hash[i], &trace_draw_call_data.rt_debug_name[i]);
+                  
+                  trace_draw_call_data.rtv_mip[i] = GetRTVMipLevel(rtv_desc);
+                  uint3 base_size = uint3{ trace_draw_call_data.rt_size[i].x, trace_draw_call_data.rt_size[i].y, trace_draw_call_data.rt_size[i].z };
+                  trace_draw_call_data.rtv_size[i] = GetTextureMipSize(base_size, trace_draw_call_data.rtv_mip[i]);
+               }
+            }
+         }
+         // These would likely get ignored if they weren't set, so clear them
+         if (!dsv)
+         {
+            trace_draw_call_data.depth_state = TraceDrawCallData::DepthStateType::Disabled;
+            trace_draw_call_data.stencil_state = TraceDrawCallData::DepthStateType::Disabled;
+         }
+         for (UINT i = 0; i < device_data.uav_max_count && i < TraceDrawCallData::uavs_size; i++)
+         {
+            if ((uavs[i] != nullptr || (show_used_unbound_resources && cached_shader->uavs[i])) && (show_unused_bound_resources || cached_shader->uavs[i]))
+            {
+               uavs[i] = RedirectMirroredRVS(uavs[i].get());
+               trace_draw_call_data.uavs[i] = reinterpret_cast<uint64_t>(uavs[i].get());
+
+               D3D11_UNORDERED_ACCESS_VIEW_DESC uav_desc = {};
+               uav_desc.Format = DXGI_FORMAT(-1);
+               if (uavs[i]) uavs[i]->GetDesc(&uav_desc);
+               trace_draw_call_data.uav_format[i] = uav_desc.Format;
+
+               FlagUpgradedResources(uavs[i].get());
+               GetResourceInfo(uavs[i].get(), trace_draw_call_data.ua_size[i], trace_draw_call_data.ua_format[i], &trace_draw_call_data.ua_type_name[i], &trace_draw_call_data.ua_hash[i], &trace_draw_call_data.ua_debug_name[i], &trace_draw_call_data.ua_is_rt[i]);
+               
+               trace_draw_call_data.uav_mip[i] = GetUAVMipLevel(uav_desc);
+               uint3 base_size = uint3{ trace_draw_call_data.ua_size[i].x, trace_draw_call_data.ua_size[i].y, trace_draw_call_data.ua_size[i].z };
+               trace_draw_call_data.uav_size[i] = GetTextureMipSize(base_size, trace_draw_call_data.uav_mip[i]);
+            }
+         }
+
+         com_ptr<ID3D11ShaderResourceView> srvs[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT];
+         native_device_context->PSGetShaderResources(0, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT, &srvs[0]);
+         for (UINT i = 0; i < D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT && i < TraceDrawCallData::srvs_size; i++)
+         {
+            if ((srvs[i] != nullptr || (show_used_unbound_resources && cached_shader->srvs[i])) && (show_unused_bound_resources || cached_shader->srvs[i]))
+            {
+               srvs[i] = RedirectMirroredRVS(srvs[i].get());
+               trace_draw_call_data.srvs[i] = reinterpret_cast<uint64_t>(srvs[i].get());
+
+               D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
+               srv_desc.Format = DXGI_FORMAT(-1);
+               if (srvs[i]) srvs[i]->GetDesc(&srv_desc);
+               trace_draw_call_data.srv_format[i] = srv_desc.Format;
+
+               FlagUpgradedResources(srvs[i].get());
+               GetResourceInfo(srvs[i].get(), trace_draw_call_data.sr_size[i], trace_draw_call_data.sr_format[i], &trace_draw_call_data.sr_type_name[i], &trace_draw_call_data.sr_hash[i], &trace_draw_call_data.sr_debug_name[i], &trace_draw_call_data.sr_is_rt[i], &trace_draw_call_data.sr_is_ua[i]);
+
+               trace_draw_call_data.srv_mip[i] = GetSRVMipLevel(srv_desc);
+               uint3 base_size = uint3{ trace_draw_call_data.sr_size[i].x, trace_draw_call_data.sr_size[i].y, trace_draw_call_data.sr_size[i].z };
+               trace_draw_call_data.srv_size[i] = GetTextureMipSize(base_size, trace_draw_call_data.srv_mip[i]);
+            }
+         }
+
+         com_ptr<ID3D11Buffer> cbs[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT];
+         UINT cbs_first_constant[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT] = {};
+         UINT cbs_num_constants[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT] = {};
+         if (device_context_1)
+            device_context_1->PSGetConstantBuffers1(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, &cbs[0], cbs_first_constant, cbs_num_constants);
+         else
+            native_device_context->PSGetConstantBuffers(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, &cbs[0]);
+         for (UINT i = 0; i < D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT; i++)
+         {
+            if ((cbs[i] != nullptr || (show_used_unbound_resources && cached_shader->cbs[i])) && (show_unused_bound_resources || cached_shader->cbs[i]))
+            {
+               trace_draw_call_data.cbs[i] = true;
+               trace_draw_call_data.cb_hash[i] = std::to_string(std::hash<void*>{}(cbs[i].get()));
+               trace_draw_call_data.cb_first_constant[i] = cbs_first_constant[i];
+               trace_draw_call_data.cb_num_constants[i] = cbs_num_constants[i];
+            }
+         }
+
+         com_ptr<ID3D11SamplerState> sampler_states[D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT];
+         native_device_context->PSGetSamplers(0, D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT, &sampler_states[0]);
+         for (UINT i = 0; i < D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT; i++)
+         {
+            if ((sampler_states[i] != nullptr || (show_used_unbound_resources && cached_shader->samplers[i])) && (show_unused_bound_resources || cached_shader->samplers[i]))
+            {
+               D3D11_SAMPLER_DESC desc = {};
+               desc.Filter = D3D11_FILTER(-1); // TODO: walk back to the source sampler instead of the one luma possibly replaced?
+               if (sampler_states[i]) sampler_states[i]->GetDesc(&desc);
+               trace_draw_call_data.samplers_filter[i] = desc.Filter;
+               trace_draw_call_data.samplers_address_u[i] = desc.AddressU;
+               trace_draw_call_data.samplers_address_v[i] = desc.AddressV;
+               trace_draw_call_data.samplers_address_w[i] = desc.AddressW;
+               trace_draw_call_data.samplers_mip_lod_bias[i] = desc.MipLODBias;
+            }
+         }
+      }
+      else if (pipeline->HasVertexShader())
+      {
+         com_ptr<ID3D11ShaderResourceView> srvs[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT];
+         native_device_context->VSGetShaderResources(0, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT, &srvs[0]);
+         for (UINT i = 0; i < D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT && i < TraceDrawCallData::srvs_size; i++)
+         {
+            if ((srvs[i] != nullptr || (show_used_unbound_resources && cached_shader->srvs[i])) && (show_unused_bound_resources || cached_shader->srvs[i]))
+            {
+               srvs[i] = RedirectMirroredRVS(srvs[i].get());
+               trace_draw_call_data.srvs[i] = reinterpret_cast<uint64_t>(srvs[i].get());
+
+               D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
+               srv_desc.Format = DXGI_FORMAT(-1);
+               if (srvs[i]) srvs[i]->GetDesc(&srv_desc);
+               trace_draw_call_data.srv_format[i] = srv_desc.Format;
+
+               FlagUpgradedResources(srvs[i].get());
+               GetResourceInfo(srvs[i].get(), trace_draw_call_data.sr_size[i], trace_draw_call_data.sr_format[i], &trace_draw_call_data.sr_type_name[i], &trace_draw_call_data.sr_hash[i], &trace_draw_call_data.sr_debug_name[i], &trace_draw_call_data.sr_is_rt[i], &trace_draw_call_data.sr_is_ua[i]);
+
+               trace_draw_call_data.srv_mip[i] = GetSRVMipLevel(srv_desc);
+               uint3 base_size = uint3{ trace_draw_call_data.sr_size[i].x, trace_draw_call_data.sr_size[i].y, trace_draw_call_data.sr_size[i].z };
+               trace_draw_call_data.srv_size[i] = GetTextureMipSize(base_size, trace_draw_call_data.srv_mip[i]);
+            }
+         }
+
+         com_ptr<ID3D11Buffer> index_buffer;
+         native_device_context->IAGetIndexBuffer(&index_buffer, &trace_draw_call_data.index_buffer_format, &trace_draw_call_data.index_buffer_offset);
+         com_ptr<ID3D11InputLayout> input_layout;
+         native_device_context->IAGetInputLayout(&input_layout);
+
+         trace_draw_call_data.index_buffer_hash = std::to_string(std::hash<void*>{}(index_buffer.get()));
+         trace_draw_call_data.input_layout_hash = std::to_string(std::hash<void*>{}(input_layout.get()));
+
+         //TODOFT5: do multiple of these! And print more data, and find the right vertex buffer
+         if (device_data.input_layouts_descs.contains(input_layout.get()))
+         {
+            const auto& input_elements_descs = device_data.input_layouts_descs.find(input_layout.get());
+            for (size_t i = 0; i < input_elements_descs->second.size(); i++)
+            {
+               com_ptr<ID3D11Buffer> vertex_buffer;
+               trace_draw_call_data.input_layouts_formats.push_back(input_elements_descs->second.at(i).Format);
+               native_device_context->IAGetVertexBuffers(input_elements_descs->second.at(i).InputSlot, 1, &vertex_buffer, nullptr, nullptr);
+               trace_draw_call_data.vertex_buffer_hashes.push_back(std::to_string(std::hash<void*>{}(vertex_buffer.get())));
+            }
+         }
+
+         com_ptr<ID3D11Buffer> cbs[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT];
+         UINT cbs_first_constant[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT] = {};
+         UINT cbs_num_constants[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT] = {};
+         if (device_context_1)
+            device_context_1->VSGetConstantBuffers1(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, &cbs[0], cbs_first_constant, cbs_num_constants);
+         else
+            native_device_context->VSGetConstantBuffers(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, &cbs[0]);
+         for (UINT i = 0; i < D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT; i++)
+         {
+            if ((cbs[i] != nullptr || (show_used_unbound_resources && cached_shader->cbs[i])) && (show_unused_bound_resources || cached_shader->cbs[i]))
+            {
+               trace_draw_call_data.cbs[i] = true;
+               trace_draw_call_data.cb_hash[i] = std::to_string(std::hash<void*>{}(cbs[i].get()));
+               trace_draw_call_data.cb_first_constant[i] = cbs_first_constant[i];
+               trace_draw_call_data.cb_num_constants[i] = cbs_num_constants[i];
+            }
+         }
+
+         com_ptr<ID3D11SamplerState> sampler_states[D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT];
+         native_device_context->VSGetSamplers(0, D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT, &sampler_states[0]);
+         for (UINT i = 0; i < D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT; i++)
+         {
+            if ((sampler_states[i] != nullptr || (show_used_unbound_resources && cached_shader->samplers[i])) && (show_unused_bound_resources || cached_shader->samplers[i]))
+            {
+               D3D11_SAMPLER_DESC desc = {};
+               desc.Filter = D3D11_FILTER(-1);
+               if (sampler_states[i]) sampler_states[i]->GetDesc(&desc);
+               trace_draw_call_data.samplers_filter[i] = desc.Filter;
+               trace_draw_call_data.samplers_address_u[i] = desc.AddressU;
+               trace_draw_call_data.samplers_address_v[i] = desc.AddressV;
+               trace_draw_call_data.samplers_address_w[i] = desc.AddressW;
+            }
+         }
+      }
+      else if (pipeline->HasComputeShader())
+      {
+         com_ptr<ID3D11ShaderResourceView> srvs[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT];
+         native_device_context->CSGetShaderResources(0, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT, &srvs[0]); // TODO: use the CSGetShaderResources1 version (all around) which also has the plane desc
+         for (UINT i = 0; i < D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT && i < TraceDrawCallData::srvs_size; i++)
+         {
+            if ((srvs[i] != nullptr || (show_used_unbound_resources && cached_shader->srvs[i])) && (show_unused_bound_resources || cached_shader->srvs[i]))
+            {
+               srvs[i] = RedirectMirroredRVS(srvs[i].get());
+               trace_draw_call_data.srvs[i] = reinterpret_cast<uint64_t>(srvs[i].get());
+
+               D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
+               srv_desc.Format = DXGI_FORMAT(-1);
+               if (srvs[i]) srvs[i]->GetDesc(&srv_desc);
+               trace_draw_call_data.srv_format[i] = srv_desc.Format;
+
+               FlagUpgradedResources(srvs[i].get());
+               GetResourceInfo(srvs[i].get(), trace_draw_call_data.sr_size[i], trace_draw_call_data.sr_format[i], &trace_draw_call_data.sr_type_name[i], &trace_draw_call_data.sr_hash[i], &trace_draw_call_data.sr_debug_name[i], &trace_draw_call_data.sr_is_rt[i], &trace_draw_call_data.sr_is_ua[i]);
+
+               trace_draw_call_data.srv_mip[i] = GetSRVMipLevel(srv_desc);
+               uint3 base_size = uint3{ trace_draw_call_data.sr_size[i].x, trace_draw_call_data.sr_size[i].y, trace_draw_call_data.sr_size[i].z };
+               trace_draw_call_data.srv_size[i] = GetTextureMipSize(base_size, trace_draw_call_data.srv_mip[i]);
+            }
+         }
+
+         com_ptr<ID3D11UnorderedAccessView> uavs[D3D11_1_UAV_SLOT_COUNT];
+         native_device_context->CSGetUnorderedAccessViews(0, device_data.uav_max_count, &uavs[0]);
+         for (UINT i = 0; i < device_data.uav_max_count && i < TraceDrawCallData::uavs_size; i++)
+         {
+            if ((uavs[i] != nullptr || (show_used_unbound_resources && cached_shader->uavs[i])) && (show_unused_bound_resources || cached_shader->uavs[i]))
+            {
+               uavs[i] = RedirectMirroredRVS(uavs[i].get());
+               trace_draw_call_data.uavs[i] = reinterpret_cast<uint64_t>(uavs[i].get());
+
+               D3D11_UNORDERED_ACCESS_VIEW_DESC uav_desc = {};
+               uav_desc.Format = DXGI_FORMAT(-1);
+               if (uavs[i]) uavs[i]->GetDesc(&uav_desc);
+               trace_draw_call_data.uav_format[i] = uav_desc.Format;
+
+               FlagUpgradedResources(uavs[i].get());
+               GetResourceInfo(uavs[i].get(), trace_draw_call_data.ua_size[i], trace_draw_call_data.ua_format[i], &trace_draw_call_data.ua_type_name[i], &trace_draw_call_data.ua_hash[i], &trace_draw_call_data.ua_debug_name[i], &trace_draw_call_data.ua_is_rt[i]);
+
+               trace_draw_call_data.uav_mip[i] = GetUAVMipLevel(uav_desc);
+               uint3 base_size = uint3{ trace_draw_call_data.ua_size[i].x, trace_draw_call_data.ua_size[i].y, trace_draw_call_data.ua_size[i].z };
+               trace_draw_call_data.uav_size[i] = GetTextureMipSize(base_size, trace_draw_call_data.uav_mip[i]);
+            }
+         }
+
+         com_ptr<ID3D11Buffer> cbs[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT];
+         UINT cbs_first_constant[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT] = {};
+         UINT cbs_num_constants[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT] = {};
+         if (device_context_1)
+            device_context_1->CSGetConstantBuffers1(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, &cbs[0], cbs_first_constant, cbs_num_constants);
+         else
+            native_device_context->CSGetConstantBuffers(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, &cbs[0]);
+         for (UINT i = 0; i < D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT; i++)
+         {
+            if ((cbs[i] != nullptr || (show_used_unbound_resources && cached_shader->cbs[i])) && (show_unused_bound_resources || cached_shader->cbs[i]))
+            {
+               trace_draw_call_data.cbs[i] = true;
+               trace_draw_call_data.cb_hash[i] = std::to_string(std::hash<void*>{}(cbs[i].get()));
+               trace_draw_call_data.cb_first_constant[i] = cbs_first_constant[i];
+               trace_draw_call_data.cb_num_constants[i] = cbs_num_constants[i];
+            }
+         }
+
+         com_ptr<ID3D11SamplerState> sampler_states[D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT];
+         native_device_context->CSGetSamplers(0, D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT, &sampler_states[0]);
+         for (UINT i = 0; i < D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT; i++)
+         {
+            if ((sampler_states[i] != nullptr || (show_used_unbound_resources && cached_shader->samplers[i])) && (show_unused_bound_resources || cached_shader->samplers[i]))
+            {
+               D3D11_SAMPLER_DESC desc = {};
+               desc.Filter = D3D11_FILTER(-1);
+               if (sampler_states[i]) sampler_states[i]->GetDesc(&desc);
+               trace_draw_call_data.samplers_filter[i] = desc.Filter;
+               trace_draw_call_data.samplers_address_u[i] = desc.AddressU;
+               trace_draw_call_data.samplers_address_v[i] = desc.AddressV;
+               trace_draw_call_data.samplers_address_w[i] = desc.AddressW;
+            }
+         }
+      }
+   }
+
+   if (trace_draw_calls_data.capacity() - trace_draw_calls_data.size() <= 1)
+      trace_draw_calls_data.reserve(trace_draw_calls_data.size() + 1000); // Possible optimization
+   trace_draw_calls_data.push_back(trace_draw_call_data);
+}
+
+// Expects mutexes to already be locked
+void AddCustomTraceDrawCallData(std::vector<TraceDrawCallData>& trace_draw_calls_data, ID3D11DeviceContext* native_device_context, const char* name, ID3D11View* target_view, bool insert_before_last = false)
+{
+   TraceDrawCallData trace_draw_call_data;
+   trace_draw_call_data.type = TraceDrawCallData::TraceDrawCallType::Custom;
+   trace_draw_call_data.command_list = native_device_context;
+   trace_draw_call_data.custom_name = name;
+   // Re-use the RTV data for simplicity (this is hardcoded to be read by "TraceDrawCallData::TraceDrawCallType::Custom" in imgui)
+   GetResourceInfo(target_view, trace_draw_call_data.rt_size[0], trace_draw_call_data.rt_format[0], &trace_draw_call_data.rt_type_name[0], &trace_draw_call_data.rt_hash[0]);
+
+   if (insert_before_last && !trace_draw_calls_data.empty())
+      trace_draw_calls_data.insert(trace_draw_calls_data.end() - 1, trace_draw_call_data);
+   else
+      trace_draw_calls_data.push_back(trace_draw_call_data);
+}
+
+// Luma passes drawn by the Core helpers below, usually from a game's draw or present hook. They can't reach the trace state (declared
+// after this file), so they queue here and Core moves the queue into the frame trace after those hooks.
+// ponytail: queued every frame even without a trace (a push and an AddRef per pass); a pass drawn outside those hooks is moved at the
+// next hook on its thread, later than where it ran.
+struct InjectedPassTrace
+{
+   ID3D11DeviceContext* context = nullptr;
+   const char* name = nullptr;
+   com_ptr<ID3D11DeviceChild> target; // A view or a resource
+};
+thread_local std::vector<InjectedPassTrace> injected_pass_traces;
+
+void QueueInjectedPassTrace(ID3D11DeviceContext* context, const char* name, ID3D11DeviceChild* target)
+{
+   injected_pass_traces.push_back({.context = context, .name = name, .target = target});
+}
+
+// Moves the passes queued for "context" into "trace_draw_calls_data" (nullptr when no trace runs: they are dropped) and clears the queue.
+// Expects the trace mutexes to already be locked.
+void MoveInjectedPassTraces(std::vector<TraceDrawCallData>* trace_draw_calls_data, ID3D11DeviceContext* context)
+{
+   if (trace_draw_calls_data)
+   {
+      for (const InjectedPassTrace& pass : injected_pass_traces)
+      {
+         if (pass.context != context)
+            continue;
+         TraceDrawCallData& trace_draw_call_data = trace_draw_calls_data->emplace_back();
+         trace_draw_call_data.type = TraceDrawCallData::TraceDrawCallType::Custom;
+         trace_draw_call_data.command_list = context;
+         trace_draw_call_data.custom_name = pass.name;
+         // The target goes in the RTV fields, like "AddCustomTraceDrawCallData()"
+         if (com_ptr<ID3D11View> view; pass.target && SUCCEEDED(pass.target->QueryInterface(&view)))
+         {
+            GetResourceInfo(view.get(), trace_draw_call_data.rt_size[0], trace_draw_call_data.rt_format[0], &trace_draw_call_data.rt_type_name[0], &trace_draw_call_data.rt_hash[0]);
+         }
+         else if (com_ptr<ID3D11Resource> resource; pass.target && SUCCEEDED(pass.target->QueryInterface(&resource)))
+         {
+            GetResourceInfo(resource.get(), trace_draw_call_data.rt_size[0], trace_draw_call_data.rt_format[0], &trace_draw_call_data.rt_type_name[0], &trace_draw_call_data.rt_hash[0]);
+         }
+      }
+   }
+   injected_pass_traces.clear();
+}
+#endif
+
+// Fullscreen (full render target) pass. "second_target_resource_texture_view" (optional): a second target of the same size, for a pixel
+// shader writing SV_Target1 too.
+void DrawCustomPixelShader(ID3D11DeviceContext* device_context, ID3D11DepthStencilState* depth_stencil_state, ID3D11BlendState* blend_state, ID3D11SamplerState* sampler_state, ID3D11VertexShader* vs, ID3D11PixelShader* ps, ID3D11ShaderResourceView* source_resource_texture_view, ID3D11RenderTargetView* target_resource_texture_view, UINT width, UINT height, bool alpha = true, ID3D11RenderTargetView* second_target_resource_texture_view = nullptr)
 {
    // Set the new resources/states:
    constexpr FLOAT blend_factor_alpha[4] = { 1.f, 1.f, 1.f, 1.f };
@@ -365,13 +951,15 @@ void DrawCustomPixelShader(ID3D11DeviceContext* device_context, ID3D11DepthStenc
    viewport.MinDepth = 0;
    viewport.MaxDepth = 1;
    device_context->RSSetViewports(1, &viewport); // Viewport is always needed
+   // The targets before the source: D3D11 binds a resource still bound as an output (e.g. the game's render target) as a null SRV
+   ID3D11RenderTargetView* const target_resource_texture_views[] = { target_resource_texture_view, second_target_resource_texture_view };
+   device_context->OMSetRenderTargets(second_target_resource_texture_view ? 2 : 1, target_resource_texture_views, nullptr);
    device_context->PSSetShaderResources(0, 1, &source_resource_texture_view);
    device_context->OMSetDepthStencilState(depth_stencil_state, 0);
    if (sampler_state) // Optional
    {
       device_context->PSSetSamplers(0, 1, &sampler_state);
    }
-   device_context->OMSetRenderTargets(1, &target_resource_texture_view, nullptr);
    device_context->VSSetShader(vs, nullptr, 0);
    device_context->PSSetShader(ps, nullptr, 0);
    device_context->IASetInputLayout(nullptr);
@@ -388,7 +976,6 @@ void DrawCustomPixelShader(ID3D11DeviceContext* device_context, ID3D11DepthStenc
 
    // Finally draw:
    device_context->Draw(4, 0);
-   Trace::CustomDraw(device_context, trace_name, 4);
 }
 
 // Sets the viewport to the full render target, useful to anticipate upscaling (before the game would have done it natively)
@@ -615,7 +1202,7 @@ struct CustomPixelShaderPassData
    UINT height = 1;
 };
 
-void DrawCustomPixelShaderPass(ID3D11Device* device, ID3D11DeviceContext* device_context, ID3D11View* resource_view, const DeviceData& device_data, uint32_t pixel_shader_hash, CustomPixelShaderPassData& data, const char* trace_name = nullptr)
+void DrawCustomPixelShaderPass(ID3D11Device* device, ID3D11DeviceContext* device_context, ID3D11View* resource_view, const DeviceData& device_data, uint32_t pixel_shader_hash, CustomPixelShaderPassData& data)
 {
    if (data.original_rv.get() != resource_view)
    {
@@ -680,7 +1267,7 @@ void DrawCustomPixelShaderPass(ID3D11Device* device, ID3D11DeviceContext* device
 
       device_context->CopySubresourceRegion(data.texture_2d.get(), 0, 0, 0, 0, resource.get(), 0, nullptr);
 
-      DrawCustomPixelShader(device_context, nullptr, nullptr, device_data.sampler_state_point.get(), vs->second.get(), ps->second.get(), data.srv.get(), data.original_or_custom_rtv.get(), data.width, data.height, true, trace_name);
+      DrawCustomPixelShader(device_context, nullptr, nullptr, device_data.sampler_state_point.get(), vs->second.get(), ps->second.get(), data.srv.get(), data.original_or_custom_rtv.get(), data.width, data.height);
    }
 }
 
@@ -701,7 +1288,7 @@ struct SanitizeNaNsData
    bool smoothed = false;
 };
 
-void SanitizeNaNs(ID3D11Device* device, ID3D11DeviceContext* device_context, ID3D11RenderTargetView* rtv, const DeviceData& device_data, SanitizeNaNsData& data, bool smoothed = false, const char* trace_name = nullptr)
+void SanitizeNaNs(ID3D11Device* device, ID3D11DeviceContext* device_context, ID3D11RenderTargetView* rtv, const DeviceData& device_data, SanitizeNaNsData& data, bool smoothed = false)
 {
    if (data.original_rtv != rtv)
    {
@@ -807,7 +1394,6 @@ void SanitizeNaNs(ID3D11Device* device, ID3D11DeviceContext* device_context, ID3
             UINT x = (GetTextureMipSize(data.width, i) + 7) / 8;
             UINT y = (GetTextureMipSize(data.height, i) + 7) / 8;
             device_context->Dispatch(x, y, 1);
-            Trace::CustomDispatch(device_context, "Sanitize NaNs Mip", x, y, 1);
          }
 
          // Clear them up to avoid overlaps (warnings), this is probably unnecessary as below we use a pixel shader
@@ -815,7 +1401,7 @@ void SanitizeNaNs(ID3D11Device* device, ID3D11DeviceContext* device_context, ID3
          device_context->CSSetUnorderedAccessViews(0, 2, null_uavs, nullptr);
       }
 
-      DrawCustomPixelShader(device_context, nullptr, nullptr, device_data.sampler_state_point.get(), vs->second.get(), ps->second.get(), data.srv.get(), data.original_rtv.get(), data.width, data.height, true, trace_name);
+      DrawCustomPixelShader(device_context, nullptr, nullptr, device_data.sampler_state_point.get(), vs->second.get(), ps->second.get(), data.srv.get(), data.original_rtv.get(), data.width, data.height);
    }
 }
 
@@ -830,8 +1416,40 @@ void ReleaseSMAAIntermediates(DeviceData& device_data)
    managed_resources.shader_resource_views["smaa_blending_weight_calculation"_h].reset();
 }
 
+// The size of the texture behind a view (0x0 without one)
+uint2 GetViewTextureSize(ID3D11View* view)
+{
+   D3D11_TEXTURE2D_DESC desc = {};
+   ComPtr<ID3D11Resource> resource;
+   ComPtr<ID3D11Texture2D> texture;
+   if (view)
+   {
+      view->GetResource(resource.put());
+      if (SUCCEEDED(resource->QueryInterface(texture.put())))
+         texture->GetDesc(&desc);
+   }
+   return uint2{desc.Width, desc.Height};
+}
+
+// Whether Core's SMAA passes ("DrawSMAA" below) are compiled
+inline bool HasSMAAShaders(const DeviceData& device_data)
+{
+   return HasShaders(device_data.native_pixel_shaders, "SMAA Edge Detection PS"_h, "SMAA Blending Weight Calculation PS"_h, "SMAA Neighborhood Blending PS"_h) &&
+          HasShaders(device_data.native_vertex_shaders, "SMAA Edge Detection VS"_h, "SMAA Blending Weight Calculation VS"_h, "SMAA Neighborhood Blending VS"_h);
+}
+
+// SMAA T2x: the game's blending weight and neighborhood blending pixel shaders built with "SMAA_SUBSAMPLE_INDICES" and
+// "SMAA_REPROJECTION" (SMAA_Passes.hlsl), and the velocity the neighborhood blend reads at t2. Its target then holds the velocity
+// length in alpha, for the game's temporal resolve ("SMAAResolvePS").
+struct SMAAT2xPasses
+{
+   ID3D11PixelShader* blending_weight_calculation_ps = nullptr;
+   ID3D11PixelShader* neighborhood_blending_ps = nullptr;
+   ID3D11ShaderResourceView* velocity = nullptr;
+};
+
 // "cb_smaa_metrics" (optional) is bound to VS and PS b1, the slot the "Luma_SMAA_impl.hlsl" files declare their metrics cbuffer at.
-void DrawSMAA(ID3D11Device* device, ID3D11DeviceContext* device_context, DeviceData& device_data, ID3D11RenderTargetView* rtv, ID3D11ShaderResourceView* srv_color_tex, ID3D11ShaderResourceView* srv_color_tex_gamma, ID3D11ShaderResourceView* srv_predication_tex = nullptr, ID3D11Buffer* cb_smaa_metrics = nullptr)
+void DrawSMAA(ID3D11Device* device, ID3D11DeviceContext* device_context, DeviceData& device_data, ID3D11RenderTargetView* rtv, ID3D11ShaderResourceView* srv_color_tex, ID3D11ShaderResourceView* srv_color_tex_gamma, ID3D11ShaderResourceView* srv_predication_tex = nullptr, ID3D11Buffer* cb_smaa_metrics = nullptr, const SMAAT2xPasses* t2x = nullptr)
 {
    auto& managed_resources = device_data.managed_resources;
 
@@ -974,7 +1592,6 @@ void DrawSMAA(ID3D11Device* device, ID3D11DeviceContext* device_context, DeviceD
    device_context->ClearRenderTargetView(managed_resources.render_target_views["smaa_edge_detection"_h].get(), clear_color);
    device_context->ClearDepthStencilView(managed_resources.depth_stencil_views["smaa_dsv"_h].get(), D3D11_CLEAR_STENCIL, 1.0f, 0);
    device_context->Draw(3, 0);
-   Trace::CustomDraw(device_context, "Luma SMAA Edge Detection", 3);
 
    //
 
@@ -996,6 +1613,14 @@ void DrawSMAA(ID3D11Device* device, ID3D11DeviceContext* device_context, DeviceD
       D3D11_SUBRESOURCE_DATA subresource_data = {};
       subresource_data.pSysMem = areaTexBytes;
       subresource_data.SysMemPitch = AREATEX_PITCH;
+#if !SMAA_SMOOTH_U_SHAPES
+      std::vector<unsigned char> area_tex_bytes(std::begin(areaTexBytes), std::end(areaTexBytes));
+      for (const auto& [offset, value] : areaTexSharpUPatch)
+      {
+         area_tex_bytes[offset] = value;
+      }
+      subresource_data.pSysMem = area_tex_bytes.data();
+#endif
       ensure(device->CreateTexture2D(&tex_desc, &subresource_data, tex.put()), >= 0);
       ensure(device->CreateShaderResourceView(tex.get(), nullptr, managed_resources.shader_resource_views["smaa_area_tex"_h].put()), >= 0);
    }
@@ -1033,6 +1658,7 @@ void DrawSMAA(ID3D11Device* device, ID3D11DeviceContext* device_context, DeviceD
    [[unlikely]] if (!managed_resources.render_target_views["smaa_blending_weight_calculation"_h])
    {
       tex_desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+      tex_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET; // Not left to the branches above, which might not have run
       ensure(device->CreateTexture2D(&tex_desc, nullptr, tex.put()), >= 0);
       ensure(device->CreateRenderTargetView(tex.get(), nullptr, managed_resources.render_target_views["smaa_blending_weight_calculation"_h].put()), >= 0);
       ensure(device->CreateShaderResourceView(tex.get(), nullptr, managed_resources.shader_resource_views["smaa_blending_weight_calculation"_h].put()), >= 0); 
@@ -1042,13 +1668,12 @@ void DrawSMAA(ID3D11Device* device, ID3D11DeviceContext* device_context, DeviceD
    device_context->OMSetDepthStencilState(managed_resources.depth_stencils["smaa_disable_depth_use_stencil"_h].get(), 1);
    device_context->OMSetRenderTargets(1, &managed_resources.render_target_views["smaa_blending_weight_calculation"_h], managed_resources.depth_stencil_views["smaa_dsv"_h].get());
    device_context->VSSetShader(device_data.native_vertex_shaders.at("SMAA Blending Weight Calculation VS"_h).get(), nullptr, 0);
-   device_context->PSSetShader(device_data.native_pixel_shaders.at("SMAA Blending Weight Calculation PS"_h).get(), nullptr, 0);
+   device_context->PSSetShader(t2x ? t2x->blending_weight_calculation_ps : device_data.native_pixel_shaders.at("SMAA Blending Weight Calculation PS"_h).get(), nullptr, 0);
    const std::array ps_srvs_blending_weight_calculation = { managed_resources.shader_resource_views["smaa_edge_detection"_h].get(), managed_resources.shader_resource_views["smaa_area_tex"_h].get(), managed_resources.shader_resource_views["smaa_search_tex"_h].get() };
    device_context->PSSetShaderResources(0, ps_srvs_blending_weight_calculation.size(), ps_srvs_blending_weight_calculation.data());
 
    device_context->ClearRenderTargetView(managed_resources.render_target_views["smaa_blending_weight_calculation"_h].get(), clear_color);
    device_context->Draw(3, 0);
-   Trace::CustomDraw(device_context, "Luma SMAA Blending Weight Calculation", 3);
 
    //
 
@@ -1058,12 +1683,11 @@ void DrawSMAA(ID3D11Device* device, ID3D11DeviceContext* device_context, DeviceD
    // Bindings.
    device_context->OMSetRenderTargets(1, &rtv, nullptr);
    device_context->VSSetShader(device_data.native_vertex_shaders.at("SMAA Neighborhood Blending VS"_h).get(), nullptr, 0);
-   device_context->PSSetShader(device_data.native_pixel_shaders.at("SMAA Neighborhood Blending PS"_h).get(), nullptr, 0);
-   const std::array ps_srvs_neighborhood_blending = { srv_color_tex, managed_resources.shader_resource_views["smaa_blending_weight_calculation"_h].get() };
+   device_context->PSSetShader(t2x ? t2x->neighborhood_blending_ps : device_data.native_pixel_shaders.at("SMAA Neighborhood Blending PS"_h).get(), nullptr, 0);
+   const std::array ps_srvs_neighborhood_blending = { srv_color_tex, managed_resources.shader_resource_views["smaa_blending_weight_calculation"_h].get(), t2x ? t2x->velocity : nullptr };
    device_context->PSSetShaderResources(0, ps_srvs_neighborhood_blending.size(), ps_srvs_neighborhood_blending.data());
 
    device_context->Draw(3, 0);
-   Trace::CustomDraw(device_context, "Luma SMAA Neighborhood Blending", 3);
 
    //
 
@@ -1089,6 +1713,10 @@ void DrawSMAA(ID3D11Device* device, ID3D11DeviceContext* device_context, DeviceD
    release_com_array(rtvs_original);
    release_com_array(ps_samplers_original);
    release_com_array(ps_srvs_original);
+
+#if DEVELOPMENT
+   QueueInjectedPassTrace(device_context, "Luma SMAA", rtv);
+#endif
 }
 
 #if ENABLE_RCAS
@@ -1132,11 +1760,66 @@ void DrawRCAS(ID3D11DeviceContext* device_context, DeviceData& device_data, ID3D
 
    device_context->PSSetConstantBuffers(0, 1, cb.get_addressof());
    DrawCustomPixelShader(device_context, device_data.default_depth_stencil_state.get(), device_data.default_blend_state.get(), nullptr,
-      device_data.native_vertex_shaders.at("Copy VS"_h).get(), device_data.native_pixel_shaders.at("RCAS PS"_h).get(), srv_source, rtv, size.x, size.y, false, "Luma RCAS");
+      device_data.native_vertex_shaders.at("Copy VS"_h).get(), device_data.native_pixel_shaders.at("RCAS PS"_h).get(), srv_source, rtv, size.x, size.y, false);
 
    draw_state_stack.Restore(device_context);
+
+#if DEVELOPMENT
+   QueueInjectedPassTrace(device_context, "Luma RCAS", rtv);
+#endif
 }
 #endif // ENABLE_RCAS
+
+// HDR-weighted MSAA resolve ("Luma_MSAAResolve_PS.hlsl", registered by the game as "pixel_shader_name") of the whole single slice
+// "source" into "dest", in place of the game's ResolveSubresource of them in "format", which also makes their views. "exposure_srv" (t1)
+// and "exposure_cb" (b0) feed the shader's MSAA_RESOLVE_EXPOSURE. The caller holds "s_mutex_shader_objects" (shared) through it, so a
+// shader reload can't release the shaders mid-draw. False, with nothing drawn, if the pair can't be bound or the shaders aren't
+// compiled: the caller keeps the hardware resolve. Restores the state it changes.
+bool DrawMSAAResolve(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, const DeviceData& device_data, ID3D11Resource* source, ID3D11Resource* dest, DXGI_FORMAT format,
+   ID3D11ShaderResourceView* exposure_srv = nullptr, ID3D11Buffer* exposure_cb = nullptr, uint32_t pixel_shader_name = "MSAA Resolve PS"_h)
+{
+   ComPtr<ID3D11Texture2D> source_texture;
+   ComPtr<ID3D11Texture2D> dest_texture;
+   if (FAILED(source->QueryInterface(source_texture.put())) || FAILED(dest->QueryInterface(dest_texture.put())))
+      return false;
+   D3D11_TEXTURE2D_DESC source_desc;
+   D3D11_TEXTURE2D_DESC dest_desc;
+   source_texture->GetDesc(&source_desc);
+   dest_texture->GetDesc(&dest_desc);
+   // MSAA targets are often created without a shader resource bind: the game adds it at their creation
+   if (source_desc.SampleDesc.Count <= 1 || source_desc.ArraySize != 1 || dest_desc.ArraySize != 1 || (source_desc.BindFlags & D3D11_BIND_SHADER_RESOURCE) == 0 || (dest_desc.BindFlags & D3D11_BIND_RENDER_TARGET) == 0)
+      return false;
+
+   auto* const vs = FindShader(device_data.native_vertex_shaders, "Copy VS"_h);
+   auto* const ps = FindShader(device_data.native_pixel_shaders, pixel_shader_name);
+   if (!vs || !ps)
+      return false;
+
+   // ponytail: views are created per resolve (one to three a frame); cache them per resource if it ever shows in a profile
+   const D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc = {.Format = format, .ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DMS};
+   const D3D11_RENDER_TARGET_VIEW_DESC rtv_desc = {.Format = format, .ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D};
+   ComPtr<ID3D11ShaderResourceView> source_srv;
+   ComPtr<ID3D11RenderTargetView> dest_rtv;
+   if (FAILED(native_device->CreateShaderResourceView(source_texture.get(), &srv_desc, source_srv.put())) || FAILED(native_device->CreateRenderTargetView(dest_texture.get(), &rtv_desc, dest_rtv.put())))
+      return false;
+
+   DrawStateStack<DrawStateStackType::FullGraphics> draw_state_stack;
+   draw_state_stack.Cache(native_device_context, device_data.uav_max_count);
+   // Games resolve with the MSAA target still bound for output, and D3D11 refuses it as a shader resource then
+   native_device_context->OMSetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, 0, 0, nullptr, nullptr);
+   native_device_context->PSSetShaderResources(1, 1, &exposure_srv);
+   native_device_context->PSSetConstantBuffers(0, 1, &exposure_cb);
+   DrawCustomPixelShader(native_device_context, device_data.default_depth_stencil_state.get(), device_data.default_blend_state.get(), nullptr, vs, ps, source_srv.get(), dest_rtv.get(), dest_desc.Width, dest_desc.Height);
+   draw_state_stack.Restore(native_device_context);
+   return true;
+}
+
+// Frees "DrawKarisAverage"'s output, both views (e.g. while a game's bloom is off); its next draw recreates it
+void ReleaseKarisAverage(DeviceData& device_data)
+{
+   device_data.managed_resources.unordered_access_views["luma_karis_average"_h].reset();
+   device_data.managed_resources.shader_resource_views["luma_karis_average"_h].reset();
+}
 
 void DrawKarisAverage(ID3D11Device* device, ID3D11DeviceContext* device_context, DeviceData& device_data, ID3D11ShaderResourceView* srv_source, ID3D11ShaderResourceView** srv_out)
 {
@@ -1158,6 +1841,18 @@ void DrawKarisAverage(ID3D11Device* device, ID3D11DeviceContext* device_context,
    D3D11_TEXTURE2D_DESC tex_desc;
    tex->GetDesc(&tex_desc);
 
+   // Rebuild the output whenever the source size changes (e.g. a game's resolution scale), not only with the swapchain.
+   if (const auto& output_uav = managed_resources.unordered_access_views["luma_karis_average"_h])
+   {
+      uint4 output_size;
+      DXGI_FORMAT output_format;
+      GetResourceInfo(output_uav.get(), output_size, output_format);
+      if (output_size.x != tex_desc.Width || output_size.y != tex_desc.Height)
+      {
+         ReleaseKarisAverage(device_data);
+      }
+   }
+
    // Create RT and views.
    if (!managed_resources.unordered_access_views["luma_karis_average"_h])
    {
@@ -1177,7 +1872,6 @@ void DrawKarisAverage(ID3D11Device* device, ID3D11DeviceContext* device_context,
    device_context->CSSetShaderResources(0, 1, &srv_source);
 
    device_context->Dispatch((tex_desc.Width + 8 - 1) / 8, (tex_desc.Height + 8 - 1) / 8, 1);
-   Trace::CustomDispatch(device_context, "Luma Karis Average", (tex_desc.Width + 8 - 1) / 8, (tex_desc.Height + 8 - 1) / 8, 1);
 
    // Karis averaged out.
    *srv_out = managed_resources.shader_resource_views["luma_karis_average"_h].get();
@@ -1190,9 +1884,9 @@ void DrawKarisAverage(ID3D11Device* device, ID3D11DeviceContext* device_context,
 
    // Reset resolution dependent resources on init swapchain.
    // Some are intentioanlly left out, we will recreate/reset them here.
-   auto on_init_swapchain = [&]()
+   auto on_init_swapchain = [&device_data]()
    {
-      managed_resources.unordered_access_views["luma_karis_average"_h].reset();
+      ReleaseKarisAverage(device_data);
    };
 
    LumaCallbacks::on_init_swapchain.try_emplace("luma_karis_average"_h, on_init_swapchain);
@@ -1218,6 +1912,16 @@ static struct
    UINT last_scene_height = 0;
    int last_nmips = -1;
 } draw_bloom_mips;
+
+// Frees "DrawBloom"'s mip chains (e.g. while a game's bloom is off); its next draw rebuilds them
+void ReleaseBloom()
+{
+   ResetCOMArray(draw_bloom_mips.rtv_mips_x);
+   ResetCOMArray(draw_bloom_mips.srv_mips_x);
+   ResetCOMArray(draw_bloom_mips.rtv_mips_y);
+   ResetCOMArray(draw_bloom_mips.srv_mips_y);
+   draw_bloom_mips.last_nmips = -1;
+}
 
 void DrawBloom(ID3D11Device* device, ID3D11DeviceContext* device_context, DeviceData& device_data, ID3D11ShaderResourceView* srv_scene, int nmips, const float* sigmas, ID3D11ShaderResourceView** srv_bloom)
 {
@@ -1403,7 +2107,6 @@ void DrawBloom(ID3D11Device* device, ID3D11DeviceContext* device_context, Device
 
    // Draw X pass.
    device_context->Draw(3, 0);
-   Trace::CustomDraw(device_context, "Luma Bloom Downsample X", 3);
 
    std::vector<D3D11_VIEWPORT> viewports_y(nmips);
    viewports_y[0].Width = y_mip0_width;
@@ -1423,7 +2126,6 @@ void DrawBloom(ID3D11Device* device, ID3D11DeviceContext* device_context, Device
 
    // Draw Y pass.
    device_context->Draw(3, 0);
-   Trace::CustomDraw(device_context, "Luma Bloom Prefilter Y", 3);
 
    //
 
@@ -1452,7 +2154,6 @@ void DrawBloom(ID3D11Device* device, ID3D11DeviceContext* device_context, Device
 
       // Draw X pass.
       device_context->Draw(3, 0);
-      Trace::CustomDraw(device_context, "Luma Bloom Downsample X", 3);
 
       viewports_y[i].Width = max(1u, y_mip0_width >> i);
       viewports_y[i].Height = max(1u, y_mip0_height >> i);
@@ -1470,7 +2171,6 @@ void DrawBloom(ID3D11Device* device, ID3D11DeviceContext* device_context, Device
 
       // Draw Y pass.
       device_context->Draw(3, 0);
-      Trace::CustomDraw(device_context, "Luma Bloom Downsample Y", 3);
    }
 
    //
@@ -1506,7 +2206,6 @@ void DrawBloom(ID3D11Device* device, ID3D11DeviceContext* device_context, Device
        device_context->OMSetBlendState(managed_resources.blends["luma_bloom_blend"_h].get(), blend_factor, UINT_MAX);
 
        device_context->Draw(3, 0);
-       Trace::CustomDraw(device_context, "Luma Bloom Upsample", 3);
    }
 
    //
@@ -1514,6 +2213,9 @@ void DrawBloom(ID3D11Device* device, ID3D11DeviceContext* device_context, Device
    // Return the final bloom.
    *srv_bloom = srv_mips_y[0];
    (*srv_bloom)->AddRef();
+#if DEVELOPMENT
+   QueueInjectedPassTrace(device_context, "Luma Bloom", *srv_bloom);
+#endif
 
    // Restore.
    device_context->OMSetBlendState(blend_original.get(), blend_factor_original, sample_mask_original);

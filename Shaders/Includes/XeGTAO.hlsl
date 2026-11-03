@@ -304,7 +304,9 @@ float XeGTAO_FastACos(float inX)
    return inX >= 0 ? res : 3.141593 - res;
 }
 
-void XeGTAO_MainPass(uint2 pixCoord, float2 localNoise, float3 viewspaceNormal, Texture2D sourceViewspaceDepth, SamplerState depthSampler, RWTexture2D<XE_GTAO_MAIN_PASS_OUTPUT_TYPE> outWorkingAOTermAndEdges)
+// Center depth, packed edges, normal and view vector, shared with the GT-VBAO main pass ("GTVBAO.hlsl").
+// Returns true when a debug view already wrote the output.
+bool XeGTAO_MainPassPrologue(uint2 pixCoord, Texture2D sourceViewspaceDepth, SamplerState depthSampler, RWTexture2D<XE_GTAO_MAIN_PASS_OUTPUT_TYPE> outWorkingAOTermAndEdges, inout float3 viewspaceNormal, out float viewspaceZ, out float edges, out float3 pixCenterPos, out float3 viewVec)
 {
    float2 normalizedScreenPos = (pixCoord + 0.5) * VIEWPORT_PIXEL_SIZE;
 
@@ -314,7 +316,7 @@ void XeGTAO_MainPass(uint2 pixCoord, float2 localNoise, float3 viewspaceNormal, 
    float4 valuesBR = sourceViewspaceDepth.GatherRed(depthSampler, float2(pixCoord * VIEWPORT_PIXEL_SIZE), int2(1, 1));
 
    // viewspace Z at the center
-   float viewspaceZ = valuesUL.y;
+   viewspaceZ = valuesUL.y;
 
    // viewspace Zs left top right bottom
    const float pixLZ = valuesUL.x;
@@ -323,22 +325,7 @@ void XeGTAO_MainPass(uint2 pixCoord, float2 localNoise, float3 viewspaceNormal, 
    const float pixBZ = valuesBR.x;
 
    float4 edgesLRTB = XeGTAO_CalculateEdges(viewspaceZ, pixLZ, pixRZ, pixTZ, pixBZ);
-   const float edges = XeGTAO_PackEdges(edgesLRTB);
-
-#if DEVELOPMENT
-   // Debug views (visible on screen through the game's own AO apply blit; the final denoise passes raw
-   // values through when DebugViewRT > 0).
-   if (DebugViewRT > 0.5 && DebugViewRT < 1.5) // 1 = depth gradient (proves live depth + linearization/scale)
-   {
-      outWorkingAOTermAndEdges[pixCoord] = XE_GTAO_MAIN_PASS_DEBUG_VALUE(saturate(frac(log2(max(viewspaceZ, 1e-6)))));
-      return;
-   }
-   if (DebugViewRT >= 3.5 && DebugViewRT < 4.5) // 4 = edges
-   {
-      outWorkingAOTermAndEdges[pixCoord] = XE_GTAO_MAIN_PASS_DEBUG_VALUE(dot(edgesLRTB, 0.25));
-      return;
-   }
-#endif
+   edges = XeGTAO_PackEdges(edgesLRTB);
 
 #if XE_GTAO_GENERATE_NORMALS
    {
@@ -354,21 +341,49 @@ void XeGTAO_MainPass(uint2 pixCoord, float2 localNoise, float3 viewspaceNormal, 
    // Move center pixel slightly towards camera to avoid imprecision artifacts due to depth buffer imprecision; offset depends on depth texture format used
    viewspaceZ *= 0.99999; // this is good for FP32 depth buffer
 
-   const float3 pixCenterPos = XeGTAO_ComputeViewspacePosition(normalizedScreenPos, viewspaceZ);
-   const float3 viewVec = normalize(-pixCenterPos);
+   pixCenterPos = XeGTAO_ComputeViewspacePosition(normalizedScreenPos, viewspaceZ);
+   viewVec = normalize(-pixCenterPos);
 
    // prevents normals that are facing away from the view vector - xeGTAO struggles with extreme cases. Upstream
    // ships this line commented out as rare in vanilla; this port runs it.
    viewspaceNormal = normalize(viewspaceNormal + max(0, -dot(viewspaceNormal, viewVec)) * viewVec);
 
 #if DEVELOPMENT
-   if (DebugViewRT >= 1.5 && DebugViewRT < 2.5) // 2 = normals view-facing term (smooth per-surface shading = correct decode)
+   // Debug views (visible on screen through the game's own AO apply blit; the final denoise passes raw
+   // values through when DebugViewRT > 0). One return at the end: fxc flags the out parameters on early returns (X4000).
+   bool wroteDebugView = true;
+   if (DebugViewRT > 0.5 && DebugViewRT < 1.5) // 1 = depth gradient (proves live depth + linearization/scale)
+   {
+      outWorkingAOTermAndEdges[pixCoord] = XE_GTAO_MAIN_PASS_DEBUG_VALUE(saturate(frac(log2(max(viewspaceZ, 1e-6)))));
+   }
+   else if (DebugViewRT >= 1.5 && DebugViewRT < 2.5) // 2 = normals view-facing term (smooth per-surface shading = correct decode)
    {
       outWorkingAOTermAndEdges[pixCoord] = XE_GTAO_MAIN_PASS_DEBUG_VALUE(saturate(abs(dot(viewspaceNormal, viewVec))));
-      return;
    }
+   else if (DebugViewRT >= 3.5 && DebugViewRT < 4.5) // 4 = edges
+   {
+      outWorkingAOTermAndEdges[pixCoord] = XE_GTAO_MAIN_PASS_DEBUG_VALUE(dot(edgesLRTB, 0.25));
+   }
+   else
+   {
+      wroteDebugView = false;
+   }
+   return wroteDebugView;
+#else
+   return false;
 #endif
+}
 
+void XeGTAO_MainPass(uint2 pixCoord, float2 localNoise, float3 viewspaceNormal, Texture2D sourceViewspaceDepth, SamplerState depthSampler, RWTexture2D<XE_GTAO_MAIN_PASS_OUTPUT_TYPE> outWorkingAOTermAndEdges)
+{
+   float viewspaceZ;
+   float edges;
+   float3 pixCenterPos;
+   float3 viewVec;
+   if (XeGTAO_MainPassPrologue(pixCoord, sourceViewspaceDepth, depthSampler, outWorkingAOTermAndEdges, viewspaceNormal, viewspaceZ, edges, pixCenterPos, viewVec))
+      return;
+
+   const float2 normalizedScreenPos = (pixCoord + 0.5) * VIEWPORT_PIXEL_SIZE;
    const float effectRadius = XE_GTAO_MAIN_PASS_EFFECT_RADIUS(viewspaceZ);
    const float sampleDistributionPower = SAMPLE_DISTRIBUTION_POWER;
    const float thinOccluderCompensation = THIN_OCCLUDER_COMPENSATION;
@@ -557,6 +572,12 @@ void XeGTAO_AddSample(float ssaoValue, float edgeValue, inout float sum, inout f
    sumWeight += weight;
 }
 
+// DebugViewRT 3: the working visibility's occlusion amplified x8 (spots broad over-occlusion)
+float XeGTAO_DebugAmplifyAO(float v)
+{
+   return saturate(1.0 - (1.0 - v * XE_GTAO_OCCLUSION_TERM_SCALE) * 8.0);
+}
+
 void XeGTAO_Denoise(uint2 pixCoordBase, Texture2D sourceAOTermAndEdges, SamplerState texSampler, RWTexture2D<XE_GTAO_DENOISE_OUTPUT_TYPE> outputTexture)
 {
 #if DEVELOPMENT
@@ -568,8 +589,8 @@ void XeGTAO_Denoise(uint2 pixCoordBase, Texture2D sourceAOTermAndEdges, SamplerS
          const uint2 dpix = uint2(pixCoordBase.x + dside, pixCoordBase.y);
          float v = sourceAOTermAndEdges.Load(int3(dpix, 0)).x;
 #if XE_GTAO_FINAL_APPLY
-         if (DebugViewRT >= 2.5 && DebugViewRT < 3.5) // 3 = AO x8 amplification (spot broad over-occlusion)
-            v = saturate(1.0 - (1.0 - v * XE_GTAO_OCCLUSION_TERM_SCALE) * 8.0);
+         if (DebugViewRT >= 2.5 && DebugViewRT < 3.5) // 3 = AO x8 amplification
+            v = XeGTAO_DebugAmplifyAO(v);
          outputTexture[dpix] = XE_GTAO_ENCODE_FINAL(v);
 #else
          outputTexture[dpix] = float2(v, sourceAOTermAndEdges.Load(int3(dpix, 0)).y);

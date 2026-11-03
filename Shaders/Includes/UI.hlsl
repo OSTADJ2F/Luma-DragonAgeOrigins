@@ -4,7 +4,7 @@
 #include "Common.hlsl"
 
 // This is usually not used and in DX it's ok to have multiple cbuffer definitions use the same slot
-cbuffer LumaUIData : register(LUMA_UI_DATA_CB_INDEX)
+cbuffer LumaUIData : LUMA_CB_REGISTER(LUMA_UI_DATA_CB_INDEX)
 {
   struct
   {

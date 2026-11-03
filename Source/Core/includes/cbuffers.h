@@ -63,11 +63,13 @@ namespace CB
       float UIPaperWhite;
       uint SRType;
       uint FrameIndex;
+      uint HDRToneMapper; // Index into "hdr_tone_mapper_names"
 
 #if DEVELOPMENT // In case we disabled the "DEVELOPMENT" shader define while the code is compiled in "DEVELOPMENT" mode, we'll simply push values that aren't read by shaders (see "CPU_DEVELOPMENT")
       LumaDevSettings DevSettings;
+      float3 Padding1;
 #else
-      float2 Padding1;
+      float Padding1;
 #endif // DEVELOPMENT
 
       LumaGameSettings GameSettings; // Custom games setting, with a per game struct

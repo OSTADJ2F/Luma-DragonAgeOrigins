@@ -125,6 +125,12 @@
 #ifndef LUMA_UI_DATA_CB_INDEX
 #define LUMA_UI_DATA_CB_INDEX b11
 #endif
+// D3D12: Luma's cbuffers are root CBVs it appends to the game's root signatures, in a register space of their own ("LUMA_CB_SPACE")
+#ifdef LUMA_CB_SPACE
+#define LUMA_CB_REGISTER(index) register(index, LUMA_CB_SPACE)
+#else
+#define LUMA_CB_REGISTER(index) register(index)
+#endif
 
 /////////////////////////////////////////
 // Rendering features toggles (development)
@@ -179,7 +185,7 @@ namespace CB
 // Luma global settings (usually, but not necessarily, changed a maximum of once per frame)
 // Regarding "LUMA_SETTINGS_CB_INDEX", most engines (e.g. CryEngine, Unreal, Unity) push the registers that are used by each shader again for every draw, so it's generally safe to overridden them anyway (they are all reset between frames).
 // Game and Dev settings should only be accessed outside of global shaders and includes, given the struct isn't guaranteed to be fully defined there.
-cbuffer LumaSettings : register(LUMA_SETTINGS_CB_INDEX)
+cbuffer LumaSettings : LUMA_CB_REGISTER(LUMA_SETTINGS_CB_INDEX)
 {
   struct
   {
@@ -196,6 +202,7 @@ cbuffer LumaSettings : register(LUMA_SETTINGS_CB_INDEX)
     float UIPaperWhiteNits; // Access this through the global variables below (only usable in certain "UI_DRAW_TYPE" modes)
     uint SRType; // Which SR is enabled if any (implies it'd be engaged and compatible) (this is on even in fullscreen UI menus that don't use upscaling)
     uint FrameIndex; // Frame counter, no need for this to be by device or swapchain
+    uint HDRToneMapper; // The game's HDR tone mapper choice, an index into its "hdr_tone_mapper_names" (0 if it has only one)
     
 // These ideally should be after anything else or if we toggled the "DEVELOPMENT" flag, the rest would get misaligned,
 // however for some reason the alignment of nested structs (the ones below) doesn't match between c++ and hlsl,
@@ -214,8 +221,9 @@ cbuffer LumaSettings : register(LUMA_SETTINGS_CB_INDEX)
     float DevSetting08; // 0, 0, 1
     float DevSetting09; // 0, 0, 1
     float DevSetting10; // 0, 0, 1
+    float3 Padding1;
 #else
-    float2 Padding1;
+    float Padding1;
 #endif
 
     // NOTE: keep anything before the game settings aligned to 16 bytes (4 floats/ints). This is the only way to match both c++ and hlsl quirks at the same time.

@@ -5,6 +5,33 @@
 
 namespace Shader
 {
+   // Subobjects whose data is a "reshade::api::shader_desc" (with its code) we copy
+   bool IsClonedShaderSubobject(reshade::api::pipeline_subobject_type type)
+   {
+      switch (type)
+      {
+      case reshade::api::pipeline_subobject_type::vertex_shader:
+      case reshade::api::pipeline_subobject_type::geometry_shader:
+      case reshade::api::pipeline_subobject_type::compute_shader:
+      case reshade::api::pipeline_subobject_type::pixel_shader:
+#if defined(DX12) && DX12
+      case reshade::api::pipeline_subobject_type::hull_shader:
+      case reshade::api::pipeline_subobject_type::domain_shader:
+      case reshade::api::pipeline_subobject_type::amplification_shader:
+      case reshade::api::pipeline_subobject_type::mesh_shader:
+      case reshade::api::pipeline_subobject_type::raygen_shader:
+      case reshade::api::pipeline_subobject_type::any_hit_shader:
+      case reshade::api::pipeline_subobject_type::closest_hit_shader:
+      case reshade::api::pipeline_subobject_type::miss_shader:
+      case reshade::api::pipeline_subobject_type::intersection_shader:
+      case reshade::api::pipeline_subobject_type::callable_shader:
+#endif
+         return true;
+      default:
+         return false;
+      }
+   }
+
    reshade::api::pipeline_subobject* ClonePipelineSubobjects(uint32_t subobject_count, const reshade::api::pipeline_subobject* subobjects)
    {
       auto* new_subobjects = new reshade::api::pipeline_subobject[subobject_count];
@@ -19,26 +46,7 @@ namespace Shader
             reshade::log::message(reshade::log::level::debug, s.str().c_str());
          }
 #endif
-         switch (subobject.type)
-         {
-         case reshade::api::pipeline_subobject_type::vertex_shader:
-#if 0
-         case reshade::api::pipeline_subobject_type::hull_shader:
-         case reshade::api::pipeline_subobject_type::domain_shader:
-#endif
-         case reshade::api::pipeline_subobject_type::geometry_shader:
-         case reshade::api::pipeline_subobject_type::compute_shader:
-         case reshade::api::pipeline_subobject_type::pixel_shader:
-#if defined(DX12) && DX12
-         case reshade::api::pipeline_subobject_type::amplification_shader:
-         case reshade::api::pipeline_subobject_type::mesh_shader:
-         case reshade::api::pipeline_subobject_type::raygen_shader:
-         case reshade::api::pipeline_subobject_type::any_hit_shader:
-         case reshade::api::pipeline_subobject_type::closest_hit_shader:
-         case reshade::api::pipeline_subobject_type::miss_shader:
-         case reshade::api::pipeline_subobject_type::intersection_shader:
-         case reshade::api::pipeline_subobject_type::callable_shader:
-#endif
+         if (IsClonedShaderSubobject(subobject.type))
          {
             new_subobjects[i].data = malloc(sizeof(reshade::api::shader_desc));
             memcpy(new_subobjects[i].data, subobject.data, sizeof(reshade::api::shader_desc));
@@ -49,6 +57,10 @@ namespace Shader
                void* code_copy = malloc(old_desc->code_size);
                memcpy(code_copy, old_desc->code, old_desc->code_size);
                new_desc->code = code_copy;
+            }
+            else
+            {
+               new_desc->code = nullptr; // Never free the game's pointer
             }
 
 #if _DEBUG && LOG_VERBOSE
@@ -63,8 +75,10 @@ namespace Shader
             s << ")";
             reshade::log::message(reshade::log::level::debug, s.str().c_str());
 #endif
-            break;
+            continue;
          }
+         switch (subobject.type)
+         {
 #if defined(DX12) && DX12
          case reshade::api::pipeline_subobject_type::input_layout:
          new_subobjects[i].data = malloc(sizeof(reshade::api::input_element) * subobject.count);
@@ -73,7 +87,7 @@ namespace Shader
          {
             auto* old_input_elements = static_cast<reshade::api::input_element*>(subobject.data);
             auto* new_input_elements = static_cast<reshade::api::input_element*>(new_subobjects[i].data);
-            new_input_elements[j].semantic = _strdup(old_input_elements[j].semantic);
+            new_input_elements[j].semantic = old_input_elements[j].semantic ? _strdup(old_input_elements[j].semantic) : nullptr;
          }
          break;
          case reshade::api::pipeline_subobject_type::stream_output_state:
@@ -126,7 +140,8 @@ namespace Shader
          break;
 #endif
          default:
-         case reshade::api::pipeline_subobject_type::unknown:
+         // Not copied: drop the game's pointer, so it's never used or freed after the original pipeline is gone
+         new_subobjects[i].data = nullptr;
          break;
          }
       }
@@ -140,21 +155,21 @@ namespace Shader
       {
          auto& suboject = subojects[i];
 
-         switch (suboject.type)
-         {
-         case reshade::api::pipeline_subobject_type::vertex_shader:
-         case reshade::api::pipeline_subobject_type::geometry_shader:
-         case reshade::api::pipeline_subobject_type::compute_shader:
-         case reshade::api::pipeline_subobject_type::pixel_shader:
+         if (IsClonedShaderSubobject(suboject.type))
          {
             auto* desc = static_cast<reshade::api::shader_desc*>(suboject.data);
             free(const_cast<void*>(desc->code));
             desc->code = nullptr;
-            break;
          }
-         default:
-         break;
+#if defined(DX12) && DX12
+         else if (suboject.type == reshade::api::pipeline_subobject_type::input_layout && suboject.data)
+         {
+            for (uint32_t j = 0; j < suboject.count; j++)
+            {
+               free(const_cast<char*>(static_cast<reshade::api::input_element*>(suboject.data)[j].semantic));
+            }
          }
+#endif
 
          free(suboject.data);
          suboject.data = nullptr;

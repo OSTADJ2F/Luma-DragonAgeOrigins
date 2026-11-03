@@ -24,7 +24,7 @@ static const float NativeAspectRatioHeight = 9.0;
 static const float NativeAspectRatio = NativeAspectRatioWidth / NativeAspectRatioHeight;
 
 // Luma per pass/instance data, this can be customized and sent at any time
-cbuffer LumaData : register(LUMA_DATA_CB_INDEX)
+cbuffer LumaData : LUMA_CB_REGISTER(LUMA_DATA_CB_INDEX)
 {
   // GPU has "32 32 32 32 | break" bits alignment on memory, so to not break any "float2", we need all the float/uint/int before them to be in groups of 2 (because we are using a unified struct).
   struct
@@ -121,6 +121,22 @@ float3 PumboAutoHDR(float3 SDRColor, float MaxPeakWhiteNits, float _PaperWhiteNi
 	return SDRColor * lerp(SingleColorScale, PerChannelColorScale, SaturationExpansionIntensity);
 }
 
+#ifndef VIDEO_AUTO_HDR_PEAK_NITS
+// Kept low on purpose: movies (e.g. Bink) are low bitrate, a higher peak exposes compression blocks in the highlights
+#define VIDEO_AUTO_HDR_PEAK_NITS 250.0
+#endif
+
+// Light "PumboAutoHDR" for SDR movies (linear in and out). "Boost" 0 puts the peak at sRGB white, where PumboAutoHDR is a no-op;
+// 1 is the full VIDEO_AUTO_HDR_PEAK_NITS. "PaperWhiteNits" is the white the movie lands at.
+float3 VideoAutoHDR(float3 LinearColor, bool Enable, float Boost, float PaperWhiteNits)
+{
+   [branch] if (Enable)
+   {
+      LinearColor = PumboAutoHDR(LinearColor, lerp(sRGB_WhiteLevelNits, VIDEO_AUTO_HDR_PEAK_NITS, saturate(Boost)), PaperWhiteNits);
+   }
+   return LinearColor;
+}
+
 // Takes an SDR/HDR linear color (that doesn't have that much dynamic range) and expands the high midtones and highlights.
 // Note: this allows "FakeHDRIntensity" to be < 0 in case you wanted to undo the effect (approximately).
 // "NormalizationPoint" needs to be > 0.
@@ -147,7 +163,7 @@ float3 FakeHDR(float3 Color, float NormalizationPoint = 0.02, float FakeHDRInten
     float3 normalizedColor = Color / NormalizationPoint;
     // Expand highlights with a power curve
     // Branching or Max would be faster depending on how many pixels pass the test. We don't really even need to anymore with "blendIntensity".
-    normalizedColor = normalizedColor > 1.0 ? pow(normalizedColor, 1.0 + FakeHDRIntensity) : normalizedColor;
+    normalizedColor = select(normalizedColor > 1.0, pow(normalizedColor, 1.0 + FakeHDRIntensity), normalizedColor);
     float3 alteredColor = lerp(Color, normalizedColor * NormalizationPoint, blendIntensity);
     Color = lerp(RestoreLuminance(Color, alteredColor, true, ColorSpace), alteredColor, SaturationExpansionIntensity);
   }
@@ -216,6 +232,20 @@ float3 SDRToHDR(float3 Color, bool InGammaSpace = true, bool IsAfterDisplayTrans
 float4 SDRToHDR(float4 Color, bool InGammaSpace = true, bool IsAfterDisplayTransfer = false, bool IsUI = false)
 {
 	return float4(SDRToHDR(Color.rgb, InGammaSpace, IsAfterDisplayTransfer, IsUI), Color.a);
+}
+
+// UI_DRAW_TYPE 2, for scene content written under a gamma SDR UI on the same canvas: the display composition scales the whole canvas
+// by UI Paper White, so scene content pre-scaled by this lands back at Game Paper White. 1 in the other UI draw types.
+// "guardUnset": also 1 when Game Paper White is unset (<= 0), which would black the scene and leave the UI.
+float GetUIPaperWhitePreScale(float gamePaperWhiteNits, float uiPaperWhiteNits, bool guardUnset)
+{
+#if UI_DRAW_TYPE >= 2
+   if (guardUnset && gamePaperWhiteNits <= 0.0)
+      return 1.0;
+   return gamePaperWhiteNits / max(uiPaperWhiteNits, 1.0);
+#else
+   return 1.0;
+#endif
 }
 
 // LUMA FT: added these functions to decode and re-encode the "back buffer" from any range to a range that roughly matched SDR linear space
@@ -411,6 +441,29 @@ void ApplyDithering(inout float3 color, float2 uv, bool gammaSpace = true, float
   color *= paperWhite;
 }
 
+// Anti-banding dither of one output quantizer step: the 8 bit code in SDR, the 10 bit BT.2020 PQ code in HDR.
+// "gammaSpace": whether "color" is gamma encoded (else linear). "paperWhiteNits": the nits the display composition maps 1 to,
+// which places the PQ code steps (HDR only, floored at 1).
+void ApplyOutputDithering(inout float3 color, float2 uv, bool gammaSpace, bool hdr, float paperWhiteNits)
+{
+   if (hdr)
+   {
+      const float pqScale = max(paperWhiteNits, 1.0) / HDR10_MaxWhiteNits;
+      const float3 linearColor = gammaSpace ? gamma_to_linear(color, GCT_MIRROR) : color;
+      float3 pq = Linear_to_PQ(BT709_To_BT2020(linearColor * pqScale), GCT_MIRROR);
+      ApplyDithering(pq, uv, true, 1.0, 10u, LumaSettings.FrameIndex, true);
+      color = BT2020_To_BT709(PQ_to_Linear(pq, GCT_MIRROR)) / pqScale;
+      if (gammaSpace)
+      {
+         color = linear_to_gamma(color, GCT_MIRROR);
+      }
+   }
+   else
+   {
+      ApplyDithering(color, uv, gammaSpace, 1.0, 8u, LumaSettings.FrameIndex, true);
+   }
+}
+
 // Fix up sharpening/blurring when done on HDR images in post processing. In SDR, the source color could only be between 0 and 1,
 // so the halos (rings) that can appear around rapidly changing colors were limited, but in HDR lights can go much brighter so the halos got noticeable with default settings.
 // This might also help with overly strong sharpening in SDR too.
@@ -445,7 +498,7 @@ float2 RemapUV(float2 UV, float2 sourceResolution, float2 targetResolution)
 float2 RemapUVFromScale(float2 UV, float2 resolutionScale /*= CV_HPosScale.xy*/, float2 sourceResolution /*= CV_ScreenSize.xy*/)
 {
   // Avoid "degrading" the quality if the resolution scale is 1
-  return resolutionScale == 1 ? UV : RemapUV(UV, sourceResolution, sourceResolution / resolutionScale);
+  return select(resolutionScale == 1, UV, RemapUV(UV, sourceResolution, sourceResolution / resolutionScale));
 }
 
 #endif // SRC_COMMON_HLSL

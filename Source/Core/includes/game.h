@@ -8,7 +8,11 @@ using namespace Shader;
 // Make sure all variables are default initialized.
 struct GameDeviceData
 {
+   virtual ~GameDeviceData() = default; // Games derive from this and own resources; Core deletes through the base pointer
+
+#if DX11
    ManagedResources managed_resources;
+#endif
 };
 
 struct GameInfo
@@ -33,10 +37,10 @@ public:
    virtual void OnLoad(std::filesystem::path& file_path, bool failed = false) {}
    // The mod initialized. Avoid locking mutexes in here.
    virtual void OnInit(bool async) {}
-   virtual void OnInitDevice(ID3D11Device* native_device, DeviceData& device_data) {}
+   virtual void OnInitDevice(NativeDevice* native_device, DeviceData& device_data) {}
    virtual void OnInitSwapchain(reshade::api::swapchain* swapchain) {}
    // You can create and "append" your custom device data here
-   virtual void OnCreateDevice(ID3D11Device* native_device, DeviceData& device_data)
+   virtual void OnCreateDevice(NativeDevice* native_device, DeviceData& device_data)
    {
       // Example data
       device_data.game = new GameDeviceData;
@@ -48,8 +52,19 @@ public:
       device_data.game = nullptr;
    }
 
-   virtual bool OverrideCopyResource(ID3D11Device* native_device, DeviceData& device_data, uint64_t& dst_resource, uint64_t& src_resource) { return false; }
-   virtual bool OverrideCopyTextureRegion(ID3D11Device* native_device, DeviceData& device_data, uint64_t& dst_resource, uint32_t dst_subresource, const D3D11_BOX* dst_box, uint64_t& src_resource, uint32_t src_subresource, const D3D11_BOX* src_box) { return false; }
+   // The resources are the ones the copy will use, after the substitution of the clones (D3D11: the indirect upgrades' mirrors) a game can change them ("dst_resource" and "src_resource" are
+   // "ID3D11Resource" or "ID3D12Resource" pointers). True if the game made the copy itself. The boxes are the copy's, null for a whole one. Released D3D12 builds only run these with texture or
+   // swapchain upgrades (the copy events aren't registered otherwise)
+#if DX12
+   using NativeBox = D3D12_BOX;
+#else
+   using NativeBox = D3D11_BOX;
+#endif
+   virtual bool OverrideCopyResource(NativeDevice* native_device, DeviceData& device_data, uint64_t& dst_resource, uint64_t& src_resource) { return false; }
+   // A whole-resource MSAA resolve after the indirect upgrade substitution ("dst_resource"/"src_resource" are the mirrors, "format" the
+   // mirrors' format). True if the game resolved it itself.
+   virtual bool OverrideResolveTextureRegion(NativeDevice* native_device, NativeCommandList* native_device_context, DeviceData& device_data, uint64_t dst_resource, uint64_t src_resource, DXGI_FORMAT format) { return false; }
+   virtual bool OverrideCopyTextureRegion(NativeDevice* native_device, DeviceData& device_data, uint64_t& dst_resource, uint32_t dst_subresource, const NativeBox* dst_box, uint64_t& src_resource, uint32_t src_subresource, const NativeBox* src_box) { return false; }
 
    // ============================================================================
    // Shader patching providers. Select which ones a game uses with the
@@ -69,16 +84,16 @@ public:
    virtual std::unique_ptr<std::byte[]> PatchShaderBytecodeSync(const std::byte* code, size_t& size, reshade::api::pipeline_subobject_type type, uint64_t shader_hash = -1, const std::byte* shader_object = nullptr, size_t shader_object_size = 0) { return nullptr; }
    virtual std::unique_ptr<std::byte[]> PatchShaderBytecodeAsync(const std::byte* code, size_t& size, reshade::api::pipeline_subobject_type type, uint64_t shader_hash = -1, const std::byte* shader_object = nullptr, size_t shader_object_size = 0) { return nullptr; }
 
-   // Called for a draw or dispatch with a custom pipeline clone selected, after the recipes' resources were bound
-   // (they come from "managed_resources", a clone missing any is swapped for its original shader for this draw).
-   // Call "Shader::UsePipelineVariant()" (here or in any draw callback) to pick the original or the clone yourself.
-   virtual DrawOrDispatchOverrideType OnDrawOrDispatchCustomPipeline(ID3D11DeviceContext* native_device_context,
-      CommandListData& cmd_list_data, DeviceData& device_data,
-      const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes,
-      std::function<void()>* original_draw_dispatch_func = nullptr)
-   {
-      return DrawOrDispatchOverrideType::None;
-   }
+   // The shader warm-up's (see "shader_warmup.h") variants of a game shader that the mod creates its own shader objects from (e.g. motion
+   // vector patches), appended to "variants". "code" is what the game's shader object was created with ("PatchShaderBytecodeSync"
+   // applied). Called on the warm-up thread.
+   virtual void AddShaderWarmupVariants(reshade::api::pipeline_subobject_type type, const std::vector<uint8_t>& code, std::vector<std::vector<uint8_t>>* variants) {}
+
+#if LUMA_USE_DXP
+   // Recipe method: operates on the full DXBC container via a DXP recipe.
+   virtual std::optional<dxp::RecipeReport> PatchShaderRecipeSync(DeviceData& device_data, const Patch::ShaderPatchRequest& request) { return std::nullopt; }
+   virtual std::optional<dxp::RecipeReport> PatchShaderRecipeAsync(DeviceData& device_data, const Patch::ShaderPatchRequest& request) { return std::nullopt; }
+#endif
 
    // Called for every game's valid draw call (any type),
    // this is where you can override passes, add new ones, cancel other ones etc.
@@ -86,10 +101,22 @@ public:
    // Return true to cancel the original call.
    // Use "original_draw_dispatch_func" to call the original draw/dispatch within your function (you have to cancel it manually if you do so, as that's not tracked). This is useful if you want to add any post draw/dispatch behaviour. "ENABLE_POST_DRAW_DISPATCH_CALLBACK" is required for the it to work. Note that some advanced debugging behaviours might conflict if you replace the draw call.
    // Not called for draws/dispatches that matched a callback in "draw_callbacks_by_shader_hashes"/"dispatch_callbacks_by_shader_hashes" (which have this same signature).
-   virtual DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func = nullptr) { return DrawOrDispatchOverrideType::None; }
+   // On D3D12 it's called while the game records its command lists, on the threads it records them on: concurrently, so lock whatever "device_data" state you access.
+   // "native_device_context" is the command list being recorded (a bundle too), and "original_draw_dispatch_func" is null for indirect and mesh draws there.
+   virtual DrawOrDispatchOverrideType OnDrawOrDispatch(NativeDevice* native_device, NativeCommandList* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func = nullptr) { return DrawOrDispatchOverrideType::None; }
+   // Called at bind time for patch-cloned pipelines to decide whether to use the
+   // patched variant (true) or the original (false). Default is true (patch ON).
+   // Requires "LUMA_PATCH_PROVIDERS".
+   virtual bool OnBindPatchedShader(DeviceData& device_data, uint32_t shader_hash, reshade::api::pipeline_subobject_type type) { return true; }
+   // Called on the render thread when a patch clone was created (lazily, on
+   // first bind) with the hashes that became live. Games flip their binding
+   // state here so resources are never bound before the patched shader can
+   // run. Must not take luma mutexes.
+   // Requires "LUMA_PATCH_PROVIDERS".
+   virtual void OnPatchedShadersPublished(DeviceData& device_data, const std::vector<uint32_t>& published_shader_hashes) {}
    // This is called every frame just before sending out the final image to the display (the swapchain).
    // You can reliable reset any per frame setting here.
-   virtual void OnPresent(ID3D11Device* native_device, DeviceData& device_data) {}
+   virtual void OnPresent(NativeDevice* native_device, DeviceData& device_data) {}
    virtual void UpdateLumaInstanceDataCB(CB::LumaInstanceDataPadded& data, CommandListData& cmd_list_data, DeviceData& device_data) {}
    // Retrieves the game's "global" (main, per view, ...) cbuffer data
    virtual bool UpdateGlobalCB(const void* global_buffer_data_ptr, reshade::api::device* device) { return false; }

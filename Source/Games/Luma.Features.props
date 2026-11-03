@@ -4,18 +4,13 @@
     <UseLumaDXP Condition="'$(UseLumaDXP)'==''">false</UseLumaDXP>
     <UseLumaNGX Condition="'$(UseLumaNGX)'==''">false</UseLumaNGX>
     <UseLumaFSR Condition="'$(UseLumaFSR)'==''">false</UseLumaFSR>
-    <!-- FSR 4 through DX11->DX12 interop (needs UseLumaFSR, x64 only). The FidelityFX API DX12 dlls are shipped next to the addon. -->
-    <UseLumaFSR4 Condition="'$(UseLumaFSR4)'==''">false</UseLumaFSR4>
-    <!-- XeSS (x64 only), natively on DX11 on Intel GPUs, and through DX11->DX12 interop on the others. Intel's signed libxess_dx11.dll and libxess.dll are shipped next to the addon. -->
+    <!-- D3D12 only: Intel's signed libxess.dll, loaded at runtime (nothing to link) -->
     <UseLumaXeSS Condition="'$(UseLumaXeSS)'==''">false</UseLumaXeSS>
-    <!-- DX11->DX12 interop (see "D3D12Interop.h"), enabled automatically by the features that need it -->
-    <UseLumaD3D12Interop Condition="'$(UseLumaD3D12Interop)'=='' and '$(UseLumaFSR)'=='true' and '$(UseLumaFSR4)'=='true'">true</UseLumaD3D12Interop>
-    <UseLumaD3D12Interop Condition="'$(UseLumaD3D12Interop)'=='' and '$(UseLumaXeSS)'=='true'">true</UseLumaD3D12Interop>
-    <UseLumaD3D12Interop Condition="'$(UseLumaD3D12Interop)'==''">false</UseLumaD3D12Interop>
-    <!-- Shared hooking library (SafetyHook and Zydis submodules), enabled automatically by the features that need it -->
-    <UseLumaSafetyHook Condition="'$(UseLumaSafetyHook)'=='' and '$(UseLumaFSR)'=='true' and '$(UseLumaFSR4)'=='true'">true</UseLumaSafetyHook>
-    <UseLumaSafetyHook Condition="'$(UseLumaSafetyHook)'==''">false</UseLumaSafetyHook>
     <UseLumaFastNoise Condition="'$(UseLumaFastNoise)'==''">false</UseLumaFastNoise>
+    <!-- 32-bit games: DLSS and FSR through the x64 "SR Bridge Helper" (Source/Core/sr_bridge); package.ps1 ships it and DLSS's dll. -->
+    <UseLumaSRBridge Condition="'$(UseLumaSRBridge)'==''">false</UseLumaSRBridge>
+    <!-- x64 D3D11 games: DLSS, FSR 4 / 3.1 and XeSS on D3D12 inside the game's process (Source/Core/unity_build_d3d12.cpp, sr_bridge/D3D12SR.h). Ships the signed dlls of all three. -->
+    <UseLumaD3D12SR Condition="'$(UseLumaD3D12SR)'==''">false</UseLumaD3D12SR>
     <!-- On by default: NVAPI is a static lib that loads the driver's DLL at runtime, so it's harmless on non NVIDIA GPUs (init just fails). -->
     <UseLumaNVAPI Condition="'$(UseLumaNVAPI)'==''">true</UseLumaNVAPI>
   </PropertyGroup>
@@ -43,10 +38,26 @@
     <LumaNGXRuntimePath Condition="'$(Configuration)'!='Development-Debug' and '$(Configuration)'!='Development-Release'">$(LumaNGXRoot)\bin\rel\nvngx_dlss.dll</LumaNGXRuntimePath>
   </PropertyGroup>
 
-  <PropertyGroup Condition="'$(UseLumaFSR)'=='true'">
+  <PropertyGroup Condition="'$(UseLumaFSR)'=='true' and '$(LumaGraphicsAPI)'!='D3D12'">
     <LumaFSRRoot>$(MSBuildThisFileDirectory)..\External\FidelityFX</LumaFSRRoot>
     <LumaFSRLibSuffix Condition="'$(Configuration)'=='Development-Debug'">d</LumaFSRLibSuffix>
     <LumaFSRLibSuffix Condition="'$(Configuration)'!='Development-Debug'"></LumaFSRLibSuffix>
+  </PropertyGroup>
+  <!-- D3D12: the FidelityFX API (FSR 4, and FSR 3.1 where FSR 4 isn't supported) from AMD's signed dlls, loaded at runtime (nothing to link) -->
+  <PropertyGroup Condition="'$(UseLumaFSR)'=='true' and '$(LumaGraphicsAPI)'=='D3D12'">
+    <LumaFSRRoot>$(MSBuildThisFileDirectory)..\External\FidelityFX-API</LumaFSRRoot>
+    <LumaFSRRuntimeDir>$(LumaFSRRoot)\signedbin</LumaFSRRuntimeDir>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(UseLumaD3D12SR)'=='true' and '$(Platform)'=='x64' and '$(LumaGraphicsAPI)'!='D3D12'">
+    <LumaD3D12SR>true</LumaD3D12SR>
+    <LumaD3D12SRNGXRoot>$(MSBuildThisFileDirectory)..\External\NGX</LumaD3D12SRNGXRoot>
+    <LumaD3D12SRFSRRoot>$(MSBuildThisFileDirectory)..\External\FidelityFX-API</LumaD3D12SRFSRRoot>
+    <LumaD3D12SRXeSSRoot>$(MSBuildThisFileDirectory)..\External\XeSS</LumaD3D12SRXeSSRoot>
+    <LumaD3D12SRNGXLib Condition="'$(Configuration)'=='Development-Debug'">nvsdk_ngx_d_dbg.lib</LumaD3D12SRNGXLib>
+    <LumaD3D12SRNGXLib Condition="'$(Configuration)'!='Development-Debug'">nvsdk_ngx_d.lib</LumaD3D12SRNGXLib>
+    <LumaD3D12SRNGXDll Condition="'$(Configuration)'=='Development-Debug' or '$(Configuration)'=='Development-Release'">$(LumaD3D12SRNGXRoot)\bin\dev\nvngx_dlss.dll</LumaD3D12SRNGXDll>
+    <LumaD3D12SRNGXDll Condition="'$(Configuration)'!='Development-Debug' and '$(Configuration)'!='Development-Release'">$(LumaD3D12SRNGXRoot)\bin\rel\nvngx_dlss.dll</LumaD3D12SRNGXDll>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(UseLumaNVAPI)'=='true'">
@@ -57,40 +68,16 @@
     <LumaNVAPILibName Condition="'$(Platform)'!='Win32'">nvapi64.lib</LumaNVAPILibName>
   </PropertyGroup>
 
-  <PropertyGroup Condition="'$(UseLumaSafetyHook)'=='true'">
-    <LumaSafetyHookRoot>$(MSBuildThisFileDirectory)..\External\safetyhook</LumaSafetyHookRoot>
-    <LumaZydisRoot>$(MSBuildThisFileDirectory)..\External\zydis</LumaZydisRoot>
-  </PropertyGroup>
-
-  <ItemGroup Condition="'$(UseLumaSafetyHook)'=='true'">
-    <ClCompile Include="$(LumaSafetyHookRoot)\src\allocator.cpp;$(LumaSafetyHookRoot)\src\easy.cpp;$(LumaSafetyHookRoot)\src\inline_hook.cpp;$(LumaSafetyHookRoot)\src\mid_hook.cpp;$(LumaSafetyHookRoot)\src\os.windows.cpp;$(LumaSafetyHookRoot)\src\utility.cpp;$(LumaSafetyHookRoot)\src\vmt_hook.cpp">
-      <ObjectFileName>$(IntDir)safetyhook\</ObjectFileName>
-      <PrecompiledHeader>NotUsing</PrecompiledHeader>
-      <ForcedIncludeFiles></ForcedIncludeFiles>
-      <TreatWarningAsError>false</TreatWarningAsError>
-    </ClCompile>
-    <!-- Zydis and Zycore have files with the same name (e.g. "String.c"), so they need separate object folders -->
-    <ClCompile Include="$(LumaZydisRoot)\src\*.c">
-      <ObjectFileName>$(IntDir)zydis\</ObjectFileName>
-      <AdditionalIncludeDirectories>$(LumaZydisRoot)\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <CompileAs>CompileAsC</CompileAs>
-      <PrecompiledHeader>NotUsing</PrecompiledHeader>
-      <ForcedIncludeFiles></ForcedIncludeFiles>
-      <TreatWarningAsError>false</TreatWarningAsError>
-    </ClCompile>
-    <ClCompile Include="$(LumaZydisRoot)\dependencies\zycore\src\*.c;$(LumaZydisRoot)\dependencies\zycore\src\API\*.c">
-      <ObjectFileName>$(IntDir)zycore\</ObjectFileName>
-      <CompileAs>CompileAsC</CompileAs>
-      <PrecompiledHeader>NotUsing</PrecompiledHeader>
-      <ForcedIncludeFiles></ForcedIncludeFiles>
-      <TreatWarningAsError>false</TreatWarningAsError>
-    </ClCompile>
-  </ItemGroup>
-
   <ItemDefinitionGroup>
     <ClCompile>
       <!-- The unity build can exceed the default object file section limit (C1128), especially in Debug. -->
       <AdditionalOptions>/bigobj %(AdditionalOptions)</AdditionalOptions>
+      <!-- MinHook is compiled below. UNICODE as in the feature blocks: this metadata overrides the CharacterSet-derived defines. -->
+      <PreprocessorDefinitions>UNICODE;_UNICODE;ENABLE_MINHOOK=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <!-- Core's graphics API is fixed per project at build time ("DX12" in Core "core.hpp"); D3D11 is the default. -->
+    <ClCompile Condition="'$(LumaGraphicsAPI)'=='D3D12'">
+      <PreprocessorDefinitions>UNICODE;_UNICODE;DX12=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <ClCompile Condition="'$(UseLumaDXP)'=='true'">
       <!-- PreprocessorDefinitions metadata overrides the CharacterSet-derived
@@ -107,19 +94,12 @@
       <AdditionalIncludeDirectories>$(LumaFSRRoot);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>UNICODE;_UNICODE;ENABLE_FIDELITY_SK=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
-    <ClCompile Condition="'$(UseLumaFSR)'=='true' and '$(UseLumaFSR4)'=='true'">
-      <PreprocessorDefinitions>UNICODE;_UNICODE;ENABLE_FSR4=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-    </ClCompile>
-    <ClCompile Condition="'$(UseLumaXeSS)'=='true'">
+    <ClCompile Condition="'$(UseLumaXeSS)'=='true' and '$(LumaGraphicsAPI)'=='D3D12'">
       <AdditionalIncludeDirectories>$(MSBuildThisFileDirectory)..\External\XeSS\inc;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>UNICODE;_UNICODE;ENABLE_XESS=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
-    <ClCompile Condition="'$(UseLumaD3D12Interop)'=='true'">
-      <PreprocessorDefinitions>UNICODE;_UNICODE;ENABLE_D3D12_INTEROP=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-    </ClCompile>
-    <ClCompile Condition="'$(UseLumaSafetyHook)'=='true'">
-      <AdditionalIncludeDirectories>$(LumaSafetyHookRoot)\include;$(LumaZydisRoot)\include;$(LumaZydisRoot)\dependencies\zycore\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>UNICODE;_UNICODE;ZYDIS_STATIC_BUILD;ZYCORE_STATIC_BUILD;ENABLE_SAFETYHOOK=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    <ClCompile Condition="'$(UseLumaSRBridge)'=='true'">
+      <PreprocessorDefinitions>UNICODE;_UNICODE;ENABLE_SR_BRIDGE=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <ClCompile Condition="'$(UseLumaFastNoise)'=='true'">
       <PreprocessorDefinitions>UNICODE;_UNICODE;ENABLE_FAST_NOISE_TEXTURES=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
@@ -135,9 +115,19 @@
       <AdditionalLibraryDirectories>$(LumaNGXRoot)\libs;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalDependencies>$(LumaNGXLibName);%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
-    <Link Condition="'$(UseLumaFSR)'=='true'">
+    <Link Condition="'$(UseLumaFSR)'=='true' and '$(LumaGraphicsAPI)'!='D3D12'">
       <AdditionalLibraryDirectories>$(LumaFSRRoot)\libs;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalDependencies>ffx_backend_dx11_x64$(LumaFSRLibSuffix).lib;ffx_fsr3_x64$(LumaFSRLibSuffix).lib;ffx_frameinterpolation_x64$(LumaFSRLibSuffix).lib;ffx_fsr3upscaler_x64$(LumaFSRLibSuffix).lib;ffx_opticalflow_x64$(LumaFSRLibSuffix).lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+    <ClCompile Condition="'$(LumaD3D12SR)'=='true'">
+      <PreprocessorDefinitions>UNICODE;_UNICODE;ENABLE_D3D12_SR=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <Link Condition="'$(LumaD3D12SR)'=='true'">
+      <AdditionalDependencies>d3d12.lib;dxgi.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+    <Link Condition="'$(LumaD3D12SR)'=='true' and '$(UseLumaNGX)'!='true'">
+      <AdditionalLibraryDirectories>$(LumaD3D12SRNGXRoot)\libs;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>$(LumaD3D12SRNGXLib);%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Link Condition="'$(UseLumaNVAPI)'=='true'">
       <AdditionalLibraryDirectories>$(LumaNVAPILibDir);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
@@ -145,19 +135,44 @@
     </Link>
   </ItemDefinitionGroup>
 
+  <!-- MinHook, compiled once per addon: Core (Reflex's sleep hook) and the game share its state (see Core "includes/minhook.h").
+       hde32/hde64 compile to nothing on the other architecture. -->
+  <ItemGroup>
+    <ClCompile Include="$(MSBuildThisFileDirectory)..\External\reshade\deps\minhook\src\buffer.c;$(MSBuildThisFileDirectory)..\External\reshade\deps\minhook\src\hook.c;$(MSBuildThisFileDirectory)..\External\reshade\deps\minhook\src\trampoline.c;$(MSBuildThisFileDirectory)..\External\reshade\deps\minhook\src\hde\hde32.c;$(MSBuildThisFileDirectory)..\External\reshade\deps\minhook\src\hde\hde64.c">
+      <CompileAs>CompileAsC</CompileAs>
+      <TreatWarningAsError>false</TreatWarningAsError>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+  </ItemGroup>
+
+  <!-- The D3D12 flavor of the SR implementations (UseLumaD3D12SR): its own translation unit, with the NGX, FidelityFX API and XeSS headers only it sees -->
+  <ItemGroup Condition="'$(LumaD3D12SR)'=='true'">
+    <ClCompile Include="$(MSBuildThisFileDirectory)..\Core\unity_build_d3d12.cpp">
+      <AdditionalIncludeDirectories>$(LumaD3D12SRNGXRoot);$(LumaD3D12SRFSRRoot);$(LumaD3D12SRXeSSRoot)\inc;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>ENABLE_NGX=1;ENABLE_FIDELITY_SK=1;ENABLE_XESS=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+  </ItemGroup>
+
+  <Target Name="LumaCopyD3D12SRRuntime" AfterTargets="Build" Condition="'$(LumaD3D12SR)'=='true' and Exists('$(TargetDir)')">
+    <ItemGroup>
+      <_LumaD3D12SRRuntime Include="$(LumaD3D12SRNGXDll)" Condition="Exists('$(LumaD3D12SRNGXDll)')" />
+      <_LumaD3D12SRRuntime Include="$(LumaD3D12SRFSRRoot)\signedbin\amd_fidelityfx_loader_dx12.dll;$(LumaD3D12SRFSRRoot)\signedbin\amd_fidelityfx_upscaler_dx12.dll" Condition="Exists('$(LumaD3D12SRFSRRoot)\signedbin\amd_fidelityfx_loader_dx12.dll') and Exists('$(LumaD3D12SRFSRRoot)\signedbin\amd_fidelityfx_upscaler_dx12.dll')" />
+      <_LumaD3D12SRRuntime Include="$(LumaD3D12SRXeSSRoot)\bin\libxess.dll" Condition="Exists('$(LumaD3D12SRXeSSRoot)\bin\libxess.dll')" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_LumaD3D12SRRuntime)" DestinationFolder="$(TargetDir)" SkipUnchangedFiles="true" />
+  </Target>
+
   <Target Name="LumaCopyNgxRuntime" AfterTargets="Build" Condition="'$(UseLumaNGX)'=='true' and Exists('$(LumaNGXRuntimePath)') and Exists('$(TargetDir)')">
     <Copy SourceFiles="$(LumaNGXRuntimePath)" DestinationFolder="$(TargetDir)" SkipUnchangedFiles="true" />
   </Target>
 
-  <Target Name="LumaCopyFfxRuntime" AfterTargets="Build" Condition="'$(UseLumaFSR)'=='true' and '$(UseLumaFSR4)'=='true' and '$(Platform)'!='Win32' and Exists('$(TargetDir)')">
-    <ItemGroup>
-      <_LumaFfxRuntimeFiles Include="$(MSBuildThisFileDirectory)..\External\FidelityFX\bin\*.dll" />
-    </ItemGroup>
-    <Copy SourceFiles="@(_LumaFfxRuntimeFiles)" DestinationFolder="$(TargetDir)" SkipUnchangedFiles="true" />
+  <Target Name="LumaCopyFsrRuntime" AfterTargets="Build" Condition="'$(LumaFSRRuntimeDir)'!='' and Exists('$(LumaFSRRuntimeDir)\amd_fidelityfx_loader_dx12.dll') and Exists('$(LumaFSRRuntimeDir)\amd_fidelityfx_upscaler_dx12.dll') and Exists('$(TargetDir)')">
+    <Copy SourceFiles="$(LumaFSRRuntimeDir)\amd_fidelityfx_loader_dx12.dll;$(LumaFSRRuntimeDir)\amd_fidelityfx_upscaler_dx12.dll" DestinationFolder="$(TargetDir)" SkipUnchangedFiles="true" />
   </Target>
 
-  <Target Name="LumaCopyXeSSRuntime" AfterTargets="Build" Condition="'$(UseLumaXeSS)'=='true' and '$(Platform)'!='Win32' and Exists('$(TargetDir)')">
-    <Copy SourceFiles="$(MSBuildThisFileDirectory)..\External\XeSS\bin\libxess.dll;$(MSBuildThisFileDirectory)..\External\XeSS\bin\libxess_dx11.dll" DestinationFolder="$(TargetDir)" SkipUnchangedFiles="true" />
+  <Target Name="LumaCopyXeSSRuntime" AfterTargets="Build" Condition="'$(UseLumaXeSS)'=='true' and '$(LumaGraphicsAPI)'=='D3D12' and Exists('$(MSBuildThisFileDirectory)..\External\XeSS\bin\libxess.dll') and Exists('$(TargetDir)')">
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)..\External\XeSS\bin\libxess.dll" DestinationFolder="$(TargetDir)" SkipUnchangedFiles="true" />
   </Target>
 
   <Target Name="LumaCopyDxpRuntime" AfterTargets="Build" Condition="false" />

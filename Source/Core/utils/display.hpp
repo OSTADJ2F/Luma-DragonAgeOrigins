@@ -34,6 +34,8 @@ namespace Display
 	{
 		bool hasInit = false;
 
+		// Never unloaded (no "NvAPI_Unload()"): NVAPI attaches its own objects to the devices it's used on (e.g. by Reflex), and D3D releases
+		// them when the native device dies, after ReShade's "destroy_device" event and the add-on's unload, so its DLLs must outlive them
 		bool Init()
 		{
 			// No need to init locally more than once for now
@@ -54,26 +56,6 @@ namespace Display
 		
 			assert(!hasInit);
 			hasInit = true;
-			return true;
-		}
-
-		bool DeInit()
-		{
-			if (!hasInit)
-			{
-				return true;
-			}
-
-			NvAPI_Status status = NvAPI_Unload();
-			NVIDIA_API_ERROR_MSG(status != NVAPI_OK, status);
-			if (status != NVAPI_OK)
-			{
-				assert(false);
-				return false;
-			}
-
-			assert(hasInit);
-			hasInit = false;
 			return true;
 		}
 

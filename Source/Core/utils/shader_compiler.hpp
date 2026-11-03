@@ -4,6 +4,7 @@
 #include <d3dcompiler.h>
 #include <dxcapi.h>
 
+#include <format>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -46,6 +47,9 @@ namespace Shader
       HullShader = 3,
       DomainShader = 4,
       ComputeShader = 5,
+      // DXIL only ("DXIL::ShaderKind")
+      MeshShader = 13,
+      AmplificationShader = 14,
    };
    struct DXBCHeader
    {
@@ -75,6 +79,65 @@ namespace Shader
 
       uint8_t byte_code[];
    };
+
+   // A chunk of a shader container by its four character code ("RTS0" the root signature, "DXIL"/"SHEX"/"SHDR" the program...), null if the container is
+   // malformed or has none. The chunk and its data are inside "code".
+   const DXBCChunk* FindChunk(const void* code, size_t size, const char* fourcc)
+   {
+      const auto* header = static_cast<const DXBCHeader*>(code);
+      if (code == nullptr || size < sizeof(DXBCHeader) || memcmp(header->format_name, "DXBC", 4) != 0 || header->file_size != size || sizeof(DXBCHeader) + uint64_t(header->chunk_count) * sizeof(uint32_t) > size)
+         return nullptr;
+      for (uint32_t i = 0; i < header->chunk_count; i++)
+      {
+         const uint32_t offset = header->chunk_offsets[i];
+         if (uint64_t(offset) + sizeof(DXBCChunk) > size)
+            return nullptr;
+         const auto* chunk = reinterpret_cast<const DXBCChunk*>(static_cast<const uint8_t*>(code) + offset);
+         if (uint64_t(offset) + sizeof(DXBCChunk) + chunk->chunk_size > size)
+            return nullptr;
+         if (memcmp(&chunk->type_name, fourcc, 4) == 0)
+            return chunk;
+      }
+      return nullptr;
+   }
+
+   // The program chunk of a shader container: "SHDR"/"SHEX" (DXBC, SM4-5.1) or "DXIL" (SM6). Both start with the same version token
+   // (the DXIL program header is laid out like "DXBCByteCodeChunk", with the same program type numbers up to compute shaders).
+   const DXBCByteCodeChunk* FindProgramChunk(const void* code, size_t size, bool* is_dxil = nullptr)
+   {
+      for (const char* fourcc : {"DXIL", "SHEX", "SHDR"})
+      {
+         const DXBCChunk* chunk = FindChunk(code, size, fourcc);
+         if (chunk == nullptr || chunk->chunk_size < sizeof(DXBCByteCodeChunk))
+            continue;
+         if (is_dxil)
+            *is_dxil = memcmp(fourcc, "DXIL", 4) == 0;
+         return reinterpret_cast<const DXBCByteCodeChunk*>(chunk->chunk_data);
+      }
+      return nullptr;
+   }
+
+   // E.g. "ps_5_1" or "cs_6_6", empty if the container has no (known) program
+   std::string GetShaderTypeAndVersion(const void* code, size_t size)
+   {
+      const DXBCByteCodeChunk* program = FindProgramChunk(code, size);
+      if (!program)
+         return {};
+      const char* type = nullptr;
+      switch (program->program_type)
+      {
+      case DXBCProgramType::PixelShader: type = "ps"; break;
+      case DXBCProgramType::VertexShader: type = "vs"; break;
+      case DXBCProgramType::GeometryShader: type = "gs"; break;
+      case DXBCProgramType::HullShader: type = "hs"; break;
+      case DXBCProgramType::DomainShader: type = "ds"; break;
+      case DXBCProgramType::ComputeShader: type = "cs"; break;
+      case DXBCProgramType::MeshShader: type = "ms"; break;
+      case DXBCProgramType::AmplificationShader: type = "as"; break;
+      default: return {};
+      }
+      return std::format("{}_{}_{}", type, program->version_major_and_minor >> 4, program->version_major_and_minor & 0xF);
+   }
 
    // Only call this once from one thread
    // Needs to be called before calling any shader compiler function
@@ -365,31 +428,60 @@ namespace Shader
       return result;
    }
 
+   // dxcompiler.dll is loaded when it's first needed (most games have no SM6 shaders) and never freed, as a compile can be running on another thread.
+   // The "Luma" folder next to the game's executable comes first (like "D3DCompiler_47.dll"), with the "dxil.dll" that signs the shaders: the compiler looks it up
+   // by name when it validates, which finds it if it's loaded already. Else the usual search order (PATH, the Windows SDK's "bin" folder...). Null if it can't be loaded.
+   DxcCreateInstanceProc GetDxcCreateInstance()
+   {
+      static const DxcCreateInstanceProc dxc_create_instance = []() -> DxcCreateInstanceProc
+      {
+         const std::filesystem::path folder = System::GetModulePath().parent_path() / Globals::MOD_NAME;
+         HMODULE dxc_module = nullptr;
+         bool preloaded_dxil = false;
+         if (std::filesystem::is_regular_file(folder / L"dxcompiler.dll"))
+         {
+            preloaded_dxil = LoadLibraryW((folder / L"dxil.dll").c_str()) != nullptr;
+            dxc_module = LoadLibraryW((folder / L"dxcompiler.dll").c_str());
+         }
+         if (dxc_module == nullptr)
+         {
+            dxc_module = LoadLibraryW(L"dxcompiler.dll");
+         }
+         const auto create_instance = DxcCreateInstanceProc(dxc_module ? GetProcAddress(dxc_module, "DxcCreateInstance") : nullptr);
+         if (create_instance == nullptr)
+         {
+            reshade::log::message(reshade::log::level::error, "dxcompiler.dll not loaded, SM6 shaders can't be compiled");
+            return nullptr;
+         }
+
+         CComPtr<IDxcCompiler> compiler;
+         CComPtr<IDxcVersionInfo> version_info;
+         UINT32 major = 0;
+         UINT32 minor = 0;
+         if (SUCCEEDED(create_instance(CLSID_DxcCompiler, __uuidof(IDxcCompiler), reinterpret_cast<void**>(&compiler))) && SUCCEEDED(compiler.QueryInterface(&version_info)))
+         {
+            version_info->GetVersion(&major, &minor);
+         }
+         const std::u8string path = System::GetModulePath(dxc_module).u8string(); // "path::string()" throws on characters outside the ANSI code page
+         reshade::log::message(reshade::log::level::info, std::format("Loaded the DXC shader compiler {}.{} from \"{}\"{}", major, minor, std::string(path.begin(), path.end()), preloaded_dxil ? ", with the dxil.dll next to it" : "").c_str());
+         return create_instance;
+      }();
+      return dxc_create_instance;
+   }
+
    HRESULT CreateLibrary(IDxcLibrary** dxc_library)
    {
-      //HMODULE dxil_loader = LoadLibraryW(L"dxil.dll");
-      HMODULE dx_compiler = LoadLibraryW(L"dxcompiler.dll");
-      if (dx_compiler == nullptr)
-      {
-         reshade::log::message(reshade::log::level::error, "dxcompiler.dll not loaded");
-         return -1;
-      }
-      auto dxc_create_instance = DxcCreateInstanceProc(GetProcAddress(dx_compiler, "DxcCreateInstance"));
-      if (dxc_create_instance == nullptr) return -1;
+      const DxcCreateInstanceProc dxc_create_instance = GetDxcCreateInstance();
+      if (dxc_create_instance == nullptr)
+         return E_FAIL;
       return dxc_create_instance(CLSID_DxcLibrary, __uuidof(IDxcLibrary), reinterpret_cast<void**>(dxc_library));
    }
 
    HRESULT CreateCompiler(IDxcCompiler** dxc_compiler)
    {
-      //HMODULE dxil_loader = LoadLibraryW(L"dxil.dll");
-      HMODULE dx_compiler = LoadLibraryW(L"dxcompiler.dll");
-      if (dx_compiler == nullptr)
-      {
-         reshade::log::message(reshade::log::level::error, "dxcompiler.dll not loaded");
-         return -1;
-      }
-      auto dxc_create_instance = DxcCreateInstanceProc(GetProcAddress(dx_compiler, "DxcCreateInstance"));
-      if (dxc_create_instance == nullptr) return -1;
+      const DxcCreateInstanceProc dxc_create_instance = GetDxcCreateInstance();
+      if (dxc_create_instance == nullptr)
+         return E_FAIL;
       return dxc_create_instance(CLSID_DxcCompiler, __uuidof(IDxcCompiler), reinterpret_cast<void**>(dxc_compiler));
    }
 
@@ -416,11 +508,9 @@ namespace Shader
 
    std::optional<std::string> DisassembleShader(const void* code, size_t size)
    {
-#if DX12
-      return DisassembleShaderDXC(code, size);
-#else
-      return DisassembleShaderFXC(code, size);
-#endif
+      bool is_dxil = false;
+      FindProgramChunk(code, size, &is_dxil);
+      return is_dxil ? DisassembleShaderDXC(code, size) : DisassembleShaderFXC(code, size);
    }
 
    void FillDefines(const std::vector<std::string>& in_defines, std::vector<D3D_SHADER_MACRO>& out_defines)
@@ -439,6 +529,106 @@ namespace Shader
       }
    }
 
+   // A shader opts into DXC's 16 bit types (off by default: they change "half" and "min16float", which breaks VS to PS signatures) with the line "// dxc: -enable-16bit-types" among its first 50 lines
+   bool OptsInto16BitTypes(const void* source, size_t source_size)
+   {
+      const std::string_view text(static_cast<const char*>(source), source_size);
+      size_t head_size = 0;
+      for (int line = 0; line < 50 && head_size < text.size(); line++)
+      {
+         const size_t newline = text.find('\n', head_size);
+         head_size = (newline == std::string_view::npos ? text.size() : newline + 1);
+      }
+      return text.substr(0, head_size).find("// dxc: -enable-16bit-types") != std::string_view::npos;
+   }
+
+   // HLSL 2021 (what the decompiled DXIL targets), plus the options the shader opts into
+   // Returns whether the source opted into 16 bit types
+   bool AddDxcLanguageArguments(std::vector<LPCWSTR>* arguments, const void* source, size_t source_size)
+   {
+      arguments->push_back(L"/HV");
+      arguments->push_back(L"2021");
+      const bool enable_16bit_types = OptsInto16BitTypes(source, source_size);
+      if (enable_16bit_types)
+      {
+         arguments->push_back(L"-enable-16bit-types");
+      }
+      return enable_16bit_types;
+   }
+
+   // The macros as DXC takes them, pointing into "strings" (which has to outlive the result)
+   std::vector<DxcDefine> ToDxcDefines(const D3D_SHADER_MACRO* defines, std::vector<std::wstring>* strings)
+   {
+      // Convert to UTF-16.
+      for (const D3D_SHADER_MACRO* cursor = defines; cursor != nullptr && cursor->Name != nullptr; ++cursor)
+      {
+         strings->emplace_back(CA2W(cursor->Name, CP_UTF8));
+         if (cursor->Definition != nullptr)
+         {
+            strings->emplace_back(CA2W(cursor->Definition, CP_UTF8));
+         }
+         else
+         {
+            strings->emplace_back(/* empty */);
+         }
+      }
+
+      std::vector<DxcDefine> dxc_defines;
+      for (size_t i = 0; i + 1 < strings->size(); i += 2)
+      {
+         dxc_defines.push_back(DxcDefine{(*strings)[i].c_str(), (*strings)[i + 1].c_str()});
+      }
+      return dxc_defines;
+   }
+
+   // The DXC counterpart of the FXC preprocessing in "PreprocessShaderFromFile()": the file with its includes and macros expanded, with the defines, include handler and
+   // options "CompileFromBlob()" compiles it with. Its hash tells whether to compile again, so the option that isn't in the code is added to it as a comment. False if it failed.
+   bool PreprocessShaderFromFileDXC(LPCWSTR file_path, LPCSTR shader_target, const D3D_SHADER_MACRO* defines, std::string& preprocessed_code, bool& error, std::string* out_error)
+   {
+      CComPtr<IDxcLibrary> library;
+      CComPtr<IDxcCompiler> compiler;
+      CComPtr<IDxcBlobEncoding> source;
+      CComPtr<IDxcIncludeHandler> include_handler;
+      if (FAILED(CreateLibrary(&library)) || FAILED(CreateCompiler(&compiler)) || FAILED(library->CreateBlobFromFile(file_path, nullptr, &source)) || FAILED(library->CreateIncludeHandler(&include_handler)))
+      {
+         return false;
+      }
+
+      std::vector<std::wstring> define_strings;
+      const std::vector<DxcDefine> dxc_defines = ToDxcDefines(defines, &define_strings);
+      std::vector<LPCWSTR> arguments;
+      const bool enable_16bit_types = AddDxcLanguageArguments(&arguments, source->GetBufferPointer(), source->GetBufferSize());
+      // The target is checked against the options (16 bit types need SM6.2) and defines macros ("__SHADER_TARGET_MAJOR"...), as it does for a compile
+      const CA2W shader_target_wide(shader_target, CP_UTF8);
+      arguments.push_back(L"-T");
+      arguments.push_back(shader_target_wide);
+      CComPtr<IDxcOperationResult> operation_result;
+      HRESULT result = compiler->Preprocess(source, file_path, arguments.data(), UINT32(arguments.size()), dxc_defines.data(), UINT32(dxc_defines.size()), include_handler, &operation_result);
+      if (SUCCEEDED(result))
+      {
+         operation_result->GetStatus(&result);
+      }
+      error = FAILED(result);
+      CComPtr<IDxcBlobEncoding> error_blob;
+      if (out_error != nullptr && operation_result != nullptr && SUCCEEDED(operation_result->GetErrorBuffer(&error_blob)) && error_blob != nullptr)
+      {
+         const char* error_text = static_cast<const char*>(error_blob->GetBufferPointer());
+         out_error->assign(error_text, strnlen(error_text, error_blob->GetBufferSize()));
+      }
+      CComPtr<IDxcBlob> preprocessed_blob;
+      if (error || FAILED(operation_result->GetResult(&preprocessed_blob)) || preprocessed_blob == nullptr)
+      {
+         return false;
+      }
+      const char* preprocessed_text = static_cast<const char*>(preprocessed_blob->GetBufferPointer());
+      preprocessed_code.assign(preprocessed_text, strnlen(preprocessed_text, preprocessed_blob->GetBufferSize())); // The blob's size can include its null terminator
+      if (enable_16bit_types)
+      {
+         preprocessed_code += "\n// dxc: -enable-16bit-types\n";
+      }
+      return true;
+   }
+
    // Returns true if the shader changed (or if we can't compare it).
    // Pass in "shader_name_w" as the full path to avoid needing to set the current directory.
    bool PreprocessShaderFromFile(LPCWSTR file_path, LPCWSTR shader_name_w, LPCSTR shader_target, std::string& preprocessed_code, std::size_t& preprocessed_hash /*= 0*/, CComPtr<ID3DBlob>& uncompiled_code_blob, const std::vector<std::string>& defines = {}, bool& error = dummy_bool, std::string* out_error = nullptr)
@@ -446,6 +636,7 @@ namespace Shader
       std::vector<D3D_SHADER_MACRO> local_defines;
       FillDefines(defines, local_defines);
 
+      bool preprocessed = false;
       if (shader_target[3] < '6')
       {
          if (d3d_readFileToBlob != nullptr && d3d_preprocess != nullptr)
@@ -479,19 +670,27 @@ namespace Shader
                if (SUCCEEDED(result) && preprocessed_blob != nullptr)
                {
                   preprocessed_code.assign(reinterpret_cast<char*>(preprocessed_blob->GetBufferPointer()));
-                  // TODO: there's possibly a more optimized way of finding the blob's hash
-                  std::size_t new_preprocessed_hash = std::hash<std::string>{}(preprocessed_code);
-#if _DEBUG // Hacky: in debug mode, always add 1 to the shader hash, so we force it to recompile between Release and Debug builds, given they use different flags (this isn't mandatory, we could rely on devs doing that manually)
-                  new_preprocessed_hash++;
-#endif
-                  if (preprocessed_hash == new_preprocessed_hash)
-                  {
-                     return false;
-                  }
-                  preprocessed_hash = new_preprocessed_hash;
+                  preprocessed = true;
                }
             }
          }
+      }
+      else
+      {
+         preprocessed = PreprocessShaderFromFileDXC(file_path, shader_target, local_defines.data(), preprocessed_code, error, out_error);
+      }
+      if (preprocessed)
+      {
+         // TODO: there's possibly a more optimized way of finding the blob's hash
+         std::size_t new_preprocessed_hash = std::hash<std::string>{}(preprocessed_code);
+#if _DEBUG // Hacky: in debug mode, always add 1 to the shader hash, so we force it to recompile between Release and Debug builds, given they use different flags (this isn't mandatory, we could rely on devs doing that manually)
+         new_preprocessed_hash++;
+#endif
+         if (preprocessed_hash == new_preprocessed_hash)
+         {
+            return false;
+         }
+         preprocessed_hash = new_preprocessed_hash;
       }
       return true;
    }
@@ -527,6 +726,28 @@ namespace Shader
       }
 
       return file_loaded;
+   }
+
+   // Saves a compiled shader as the ".cso" of its source, or of "file_write_path" if it's given (".cso" replaces ".hlsl", else it's added)
+   void WriteCompiledShaderToFile(ID3DBlob* compiled_shader, LPCWSTR file_read_path, LPCWSTR file_write_path)
+   {
+      if (d3d_writeBlobToFile == nullptr)
+      {
+         return;
+      }
+      const bool overwrite = true; // Overwrite whatever original or custom shader we previously had there
+      std::wstring file_path_cso = (file_write_path && file_write_path[0] != '\0') ? file_write_path : file_read_path;
+      if (file_path_cso.ends_with(L".hlsl"))
+      {
+         file_path_cso = file_path_cso.substr(0, file_path_cso.size() - 5); // strlen(".hlsl")
+         file_path_cso += L".cso";
+      }
+      else if (!file_path_cso.ends_with(L".cso"))
+      {
+         file_path_cso += L".cso";
+      }
+      HRESULT result = d3d_writeBlobToFile(compiled_shader, file_path_cso.c_str(), overwrite);
+      assert(SUCCEEDED(result));
    }
 
    void CompileShaderFromFileFXC(std::vector<uint8_t>& output, const CComPtr<ID3DBlob>& optional_uncompiled_code_input, LPCWSTR file_read_path, LPCSTR shader_target, const D3D_SHADER_MACRO* defines = nullptr, bool save_to_disk = false, bool& error = dummy_bool, std::string* out_error = nullptr, LPCWSTR file_write_path = nullptr, LPCSTR func_name = nullptr)
@@ -607,21 +828,9 @@ namespace Shader
             reinterpret_cast<uint8_t*>(out_blob->GetBufferPointer()),
             reinterpret_cast<uint8_t*>(out_blob->GetBufferPointer()) + out_blob->GetBufferSize());
 
-         if (save_to_disk && d3d_writeBlobToFile != nullptr)
+         if (save_to_disk)
          {
-            const bool overwrite = true; // Overwrite whatever original or custom shader we previously had there
-            std::wstring file_path_cso = (file_write_path && file_write_path[0] != '\0') ? file_write_path : file_read_path;
-            if (file_path_cso.ends_with(L".hlsl"))
-            {
-               file_path_cso = file_path_cso.substr(0, file_path_cso.size() - 5); // strlen(".hlsl")
-               file_path_cso += L".cso";
-            }
-            else if (!file_path_cso.ends_with(L".cso"))
-            {
-               file_path_cso += L".cso";
-            }
-            HRESULT result2 = d3d_writeBlobToFile(out_blob, file_path_cso.c_str(), overwrite);
-            assert(SUCCEEDED(result2));
+            WriteCompiledShaderToFile(out_blob, file_read_path, file_write_path);
          }
       }
 
@@ -704,38 +913,8 @@ namespace Shader
       {
          const CA2W entrypoint_wide(entrypoint, CP_UTF8);
          const CA2W target_profile_wide(target, CP_UTF8);
-         std::vector<std::wstring> define_values;
-         std::vector<DxcDefine> new_defines;
-         if (defines != nullptr)
-         {
-            CONST D3D_SHADER_MACRO* cursor = defines;
-
-            // Convert to UTF-16.
-            while (cursor != nullptr && cursor->Name != nullptr)
-            {
-               define_values.emplace_back(CA2W(cursor->Name, CP_UTF8));
-               if (cursor->Definition != nullptr)
-               {
-                  define_values.emplace_back(
-                     CA2W(cursor->Definition, CP_UTF8));
-               }
-               else
-               {
-                  define_values.emplace_back(/* empty */);
-               }
-               ++cursor;
-            }
-
-            // Build up array.
-            cursor = defines;
-            size_t i = 0;
-            while (cursor->Name != nullptr)
-            {
-               new_defines.push_back(
-                  DxcDefine{ define_values[i++].c_str(), define_values[i++].c_str() });
-               ++cursor;
-            }
-         }
+         std::vector<std::wstring> define_strings;
+         const std::vector<DxcDefine> new_defines = ToDxcDefines(defines, &define_strings);
 
          std::vector<LPCWSTR> arguments;
          if ((flags1 & D3DCOMPILE_ENABLE_BACKWARDS_COMPATIBILITY) != 0) arguments.push_back(L"/Gec");
@@ -768,8 +947,7 @@ namespace Shader
          // We don't implement this:
          // if(flags1 & D3DCOMPILE_PARTIAL_PRECISION) arguments.push_back(L"/Gpp");
          if ((flags1 & D3DCOMPILE_RESOURCES_MAY_ALIAS) != 0) arguments.push_back(L"/res_may_alias");
-         arguments.push_back(L"/HV");
-         arguments.push_back(L"2021");
+         AddDxcLanguageArguments(&arguments, source->GetBufferPointer(), source->GetBufferSize());
 
          IFR(CreateCompiler(&compiler));
          IFR(compiler->Compile(
@@ -846,7 +1024,7 @@ namespace Shader
       return CompileFromBlob(source, file_name, defines, include_handler, entrypoint, target, flags1, flags2, code, error_messages);
    }
 
-   void CompileShaderFromFileDXC(std::vector<uint8_t>& output, LPCWSTR file_path, LPCSTR shader_target, const D3D_SHADER_MACRO* defines = nullptr, bool& error = dummy_bool, LPCSTR func_name = nullptr, std::string* out_error = nullptr)
+   void CompileShaderFromFileDXC(std::vector<uint8_t>& output, LPCWSTR file_path, LPCSTR shader_target, const D3D_SHADER_MACRO* defines = nullptr, bool save_to_disk = false, bool& error = dummy_bool, std::string* out_error = nullptr, LPCWSTR file_write_path = nullptr, LPCSTR func_name = nullptr)
    {
       if (func_name == nullptr)
          func_name = "main";
@@ -854,7 +1032,6 @@ namespace Shader
       CComPtr<ID3DBlob> out_blob;
       CComPtr<ID3DBlob> error_blob;
       // TODO: add optional input (code) blob here too
-      // TODO: add optional serialization to disk here too
       HRESULT result = BridgeD3DCompileFromFile(
          file_path,
          defines,
@@ -870,6 +1047,11 @@ namespace Shader
          output.assign(
             reinterpret_cast<uint8_t*>(out_blob->GetBufferPointer()),
             reinterpret_cast<uint8_t*>(out_blob->GetBufferPointer()) + out_blob->GetBufferSize());
+
+         if (save_to_disk)
+         {
+            WriteCompiledShaderToFile(out_blob, file_path, file_write_path);
+         }
       }
 
       bool failed = FAILED(result);
@@ -919,6 +1101,6 @@ namespace Shader
          CompileShaderFromFileFXC(output, optional_uncompiled_code_input, file_path, shader_target, local_defines.data(), save_to_disk, error, out_error, file_write_path, func_name);
          return;
       }
-      CompileShaderFromFileDXC(output, file_path, shader_target, local_defines.data(), error, func_name, out_error);
+      CompileShaderFromFileDXC(output, file_path, shader_target, local_defines.data(), save_to_disk, error, out_error, file_write_path, func_name);
    }
 }

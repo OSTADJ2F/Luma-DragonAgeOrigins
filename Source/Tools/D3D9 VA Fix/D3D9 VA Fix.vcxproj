@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <!-- x86 d3d9.dll proxy in front of dgVoodoo (renamed d3d9_chain.dll). package.ps1 ships it as d3d9.dll with the
+       games that set UseD3D9VAFix. Static CRT: it loads into the game before anything else. build.cmd builds this
+       project for the offline tests. -->
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Development-Debug|Win32">
+      <Configuration>Development-Debug</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Development-Release|Win32">
+      <Configuration>Development-Release</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Publishing-Release|Win32">
+      <Configuration>Publishing-Release</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Test-Release|Win32">
+      <Configuration>Test-Release</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{B74BC74A-D4CD-4381-8248-2F518387420B}</ProjectGuid>
+    <Keyword>Win32Proj</Keyword>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+    <ProjectName>D3D9 VA Fix</ProjectName>
+    <VCProjectUpgraderObjectName>NoUpgrade</VCProjectUpgraderObjectName>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <CharacterSet>Unicode</CharacterSet>
+    <PlatformToolset>v145</PlatformToolset>
+    <UseDebugLibraries Condition="'$(Configuration)'=='Development-Debug'">true</UseDebugLibraries>
+    <UseDebugLibraries Condition="'$(Configuration)'!='Development-Debug'">false</UseDebugLibraries>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup>
+    <TargetName>Luma-D3D9-VA-Fix</TargetName>
+    <OutDir>$(SolutionDir)\Binaries\Win32-$(Configuration)\</OutDir>
+    <IntDir>$(SolutionDir)\Binaries\Intermediate\D3D9VAFix-$(Platform)-$(Configuration)\</IntDir>
+    <LinkIncremental>false</LinkIncremental>
+  </PropertyGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <RuntimeLibrary Condition="'$(Configuration)'=='Development-Debug'">MultiThreadedDebug</RuntimeLibrary>
+      <RuntimeLibrary Condition="'$(Configuration)'!='Development-Debug'">MultiThreaded</RuntimeLibrary>
+      <Optimization Condition="'$(Configuration)'=='Development-Debug'">Disabled</Optimization>
+      <Optimization Condition="'$(Configuration)'!='Development-Debug'">MaxSpeed</Optimization>
+      <ControlFlowGuard>Guard</ControlFlowGuard>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalDependencies>psapi.lib;user32.lib;dxguid.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalOptions>/PDBALTPATH:%_PDB% %(AdditionalOptions)</AdditionalOptions>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="d3d9_memlog.cpp" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

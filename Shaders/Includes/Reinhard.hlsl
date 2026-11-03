@@ -1,3 +1,6 @@
+#ifndef SRC_REINHARD_HLSL
+#define SRC_REINHARD_HLSL
+
 #include "Color.hlsl"
 
 // Erik Reinhard, Michael Stark, Peter Shirley, and James Ferwerda.
@@ -53,7 +56,7 @@ namespace Reinhard
       possibleOutValue = min(possibleOutValue, Out_Peak);
       Color = max(Color, 0.0);
     }
-    return (Color <= ShoulderStart) ? Color : possibleOutValue;
+    return select(Color <= ShoulderStart, Color, possibleOutValue);
   }
 
   // Reinhard highlight compression that is identity up to ShoulderStart, then smoothly compresses toward PeakOut (never exceeding it).
@@ -233,3 +236,5 @@ float3 ReinhardTonemap(float3 color, float peak_nits, float diffuse_nits, Reinha
       return color_output;
     };
 }
+
+#endif // SRC_REINHARD_HLSL

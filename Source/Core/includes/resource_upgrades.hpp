@@ -82,9 +82,11 @@ public:
    {
       // keep the original one, SDR or whatnot
       None,
-      // scRGB linear HDR (16 bit float)
+      // The game renders scRGB linear HDR into a 16 bit float back buffer. With "ENABLE_SWAPCHAIN_PROXY" that buffer is a proxy texture
+      // (what the game, ReShade and Luma's display composition see) and the presented one is R10G10B10A2_UNORM: BT.2020 PQ HDR10 on HDR
+      // displays, sRGB 10 bit on SDR ones, written at the end of the frame. Without it, the real swapchain is the 16 bit float one.
       scRGB,
-      // BT.2020 PQ HDR (10 bit UNORM)
+      // The game itself writes BT.2020 PQ HDR (10 bit UNORM) into the real back buffer (e.g. FF7 Remake, Project Diva)
       HDR10
    };
    // Initialize freshly created mirrors with the original's current content (converted when needed).
@@ -164,6 +166,10 @@ public:
    // These are sometimes referred to as: indirect, mirrored, proxy, redirected, cloned, ...
    // See "FindOrCreateIndirectUpgradedResource()" for the main functionality.
    static inline bool enable_indirect_texture_format_upgrades = false;
+   // False: nothing is upgraded when it's created, "texture_upgrade_formats" and the size filters only drive the writer shaders' upgrades
+   // ("auto_texture_format_upgrade_shader_hashes") and the chains from them. For a game whose wanted target shares its format and size with
+   // targets that must stay as they are (The Witcher 2: dgVoodoo's present blit target and the G-buffer).
+   static inline bool texture_format_upgrades_on_creation = true;
    // Automatically upgrade all textures that are used as target of an indirect upgraded resource, and their views.
    // Indirect texture mirrors might still be automatically created if "texture_format_upgrades_type" is enabled, in case the game tried to copy an upgraded resource into an incompatible one that wasn't upgraded etc.
    // This can work even without "enable_indirect_texture_format_upgrades", in case we upgraded textures through "auto_texture_format_upgrade_shader_hashes", or in case a texture wasn't a render target but was used as copy target of one.
@@ -218,12 +224,15 @@ public:
    // Runtime mirror state
    // ------------------------------------------------------------------
    std::unordered_set<uint64_t> upgraded_resources; // All the directly upgraded resources, excluding the swapchains backbuffers, as they are created internally by DX
+   std::unordered_map<uint64_t, reshade::api::format> original_upgraded_resources_formats; // The format the game created each directly upgraded resource with (its CPU writes are converted from it). DEVELOPMENT also lists the upgraded swapchain buffers
 #if DEVELOPMENT
-   std::unordered_map<uint64_t, reshade::api::format> original_upgraded_resources_formats; // Maps the original resource to its direct upgraded format. These include the swapchain buffers too!
    std::unordered_map<uint64_t, std::pair<uint64_t, reshade::api::format>> original_upgraded_resource_views_formats; // All the views for direct upgraded resources, with the resource and the original resource view format
 #endif
    std::unordered_map<uint64_t, IndirectUpgradedResource> original_resources_to_mirrored_upgraded_resources; // TODO: convert/copy the initial/current data from the source texture when created. Also rename to "indirect_upgraded"
    std::unordered_map<uint64_t, uint64_t> original_resource_views_to_mirrored_upgraded_resource_views;
+   // Set with the first mirror (never cleared), read lock free: until then no view can be replaced by a mirror view, so the view bind
+   // hooks skip the device lock
+   std::atomic<bool> any_mirror = false;
    // Mirror views grouped by their mirror resource. Lets OnDestroyResource unlink a destroyed mirror's views by
    // iterating only that mirror's (small) set with plain hash lookups, instead of scanning the whole view map with
    // a device call (get_resource_from_view) per entry while holding the lock.

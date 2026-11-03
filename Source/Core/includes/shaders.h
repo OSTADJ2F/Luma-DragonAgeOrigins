@@ -2,12 +2,18 @@
 
 #include "shader_define.h"
 
+#include <array>
+#include <atomic>
+#include <memory>
+#include <shared_mutex>
+#include <vector>
+#if DX12 && ENABLE_MINHOOK
+#include "d3d12_pso_capture.h"
+#endif
+
 // Forward declarations
 enum class ShaderReplaceDrawType;
 enum class ShaderCustomDepthStencilType;
-
-namespace Patch { struct ClonePatchData; struct PatchedShaderData; }
-struct CommandListData;
 
 namespace Shader
 {
@@ -38,36 +44,26 @@ namespace Shader
    {
       None = 0,      // No patch applied
       Inplace = 1,   // Applied in-place at shader creation (sync, INPLACE mode)
-      Sync = 2,      // Applied via a pipeline clone created synchronously at pipeline init or bind (CLONE mode)
+      Sync = 2,      // Applied via a pipeline clone created synchronously at pipeline init (CLONE mode)
       Async = 3,     // Applied via a pipeline clone created on the background thread
    };
 
-   // Which version of a pipeline is bound: the game's own, or its clone (custom shader files and patches).
-   enum class PipelineVariant : uint8_t
+   // Which shader variant is (or should be) bound.
+   enum class ShaderVariant : uint8_t
    {
-      Original,
-      Custom,
+      Original = 0,  // the game's original shader
+      Patched  = 1,  // the pipeline clone (patch applied)
    };
 
-
    // What a pipeline's clone was built from (set at clone creation, reset before
-   // each re-clone). A file wins over a patch on the same hash; a pipeline
-   // containing both sources is classified as File. Used to preserve patch clones
-   // across unloads and to tell patch toggles from file swaps.
+   // each re-clone). Exactly one source per clone: a file wins over a patch on
+   // the same hash. Used to preserve patch clones across unloads and to tell
+   // patch toggles from file swaps.
    enum class CloneOrigin : uint8_t
    {
       None = 0,
       File = 1,
       Patch = 2,
-   };
-
-   // What a pipeline clone was built from, per shader stage. Copied on command lists when bound.
-   struct CustomPipelineData
-   {
-      reshade::api::shader_stage file_stages = reshade::api::shader_stage(0);
-      reshade::api::shader_stage patch_stages = reshade::api::shader_stage(0);
-      // Recipe reports and clone ownership (patch.hpp), null for clones without recipes. Shared with the command lists that bound the clone.
-      std::shared_ptr<Patch::ClonePatchData> patch_data;
    };
 
    // Mostly hardcoded to match a shader object, but it can work for other ReShade pipelines as well
@@ -87,22 +83,68 @@ namespace Shader
 #endif
       // True if we cloned it and "replaced" it with custom shaders
       bool cloned = false;
-      bool manually_unloaded = false;
       // Needs to be destroyed when the original pipeline is.
       reshade::api::pipeline pipeline_clone;
       // How the patch was applied to this pipeline (for the frame capture view: "#", "#S", "#A")
       PatchApplicationMode patch_application_mode = PatchApplicationMode::None;
       // What the current clone was built from (set at clone creation, reset
       // before each re-clone). Preserves patch clones across unloads; a file
-      // wins over a patch on the same shader hash.
+      // wins over a patch on the same clone.
       CloneOrigin clone_origin = CloneOrigin::None;
-      CustomPipelineData custom_pipeline_data;
       // Original shaders hash (there should only be one except in DX12)
       // Any value is valid and possible, including 0
 #if DX12
       std::vector<uint32_t> shader_hashes;
+      std::vector<reshade::api::pipeline_subobject_type> shader_types; // The stage of each of "shader_hashes"
 #else
       std::array<uint32_t, 1> shader_hashes;
+#endif
+
+#if DX12
+      // The root signature of "layout", referenced by us so a clone can use it after the game released it. Null if the shaders embed it
+      com_ptr<ID3D12RootSignature> root_signature;
+      // The root parameters of Luma's CBVs in it, -1 for the CBVs it doesn't have (see "D3D12RootSignatures::LumaParams"). Plain integers: builds without MinHook have no root signature hook
+      int32_t luma_settings_param = -1;
+      int32_t luma_data_param = -1;
+#if ENABLE_MINHOOK
+      // The stream the game created the pipeline with (see "includes/d3d12_pso_capture.h"), its shader bytecode pointing at the copies in
+      // "subobjects_cache". Null if the create wasn't captured: clones are then rebuilt by ReShade
+      std::unique_ptr<D3D12PsoCapture::Stream> capture;
+#endif
+      // The clone bound in place of the original, 0 if none. Read without a lock by the bind callback. Owned like "pipeline_clone", which it
+      // can mirror: destroyed once, with the original
+      std::atomic<uint64_t> active_clone = 0;
+      // The hash of the code the clone in "pipeline_clone" was built from, kept with it when it's retired. Under "s_mutex_generic", like "pipeline_clone"
+      uint64_t active_clone_code_hash = 0;
+      // The clones that were replaced, built from the code of "code_hash". A command list can still hold one, so they live as long as the
+      // original, and a reload reuses the one with the same hash
+      struct RetiredClone
+      {
+         uint64_t code_hash = 0;
+         reshade::api::pipeline clone = {};
+      };
+      std::vector<RetiredClone> retired_clones;
+      // The calls of "LoadCustomShaders()" creating clones of the pipeline without "s_mutex_generic" (device calls). A destroy meanwhile only unlinks it and sets "destroyed": the
+      // last unpin frees it (see "FreeCachedPipeline()"). Both under "s_mutex_generic"
+      uint32_t clone_pins = 0;
+      bool destroyed = false;
+
+      // The render target formats the pipeline declares (the stream's if it was captured, else the subobject ReShade reports): D3D12 checks them against the render targets bound when it
+      // draws, which the upgrades change. Its clones declare the same
+      std::array<DXGI_FORMAT, 8> render_target_formats = {};
+      uint32_t render_target_count = 0;
+      // The pipelines made from this one, or from one of its clones ("base": its handle stands for the same code as long as it lives), with other render target formats (see
+      // "FindOrCreateD3D12PipelineVariant()"), or a game's own variant of the original (see "FindOrCreateD3D12GameVariant()"). They live as long as the original, like the retired clones:
+      // a command list can still hold one. The lock is never held across a device call
+      struct RenderTargetVariant
+      {
+         uint64_t base = 0;
+         std::array<DXGI_FORMAT, 8> formats = {};
+         uint32_t game_variant_id = 0; // 0 for the format variants of Core, else the game's id (then "base" is the original)
+         uint64_t pipeline = 0;        // 0 if making it failed or a game refused the pipeline, it's not tried again
+      };
+      mutable std::shared_mutex variants_mutex;
+      mutable std::vector<RenderTargetVariant> variants;
 #endif
 
 #if DEVELOPMENT
@@ -168,7 +210,22 @@ namespace Shader
          }
          return false;
       }
-#if DEVELOPMENT
+      // The stage of a shader in the frame capture, "XS" if unknown
+      static const char* StageName(reshade::api::pipeline_subobject_type type)
+      {
+         switch (type)
+         {
+         case reshade::api::pipeline_subobject_type::vertex_shader: return "VS";
+         case reshade::api::pipeline_subobject_type::hull_shader: return "HS";
+         case reshade::api::pipeline_subobject_type::domain_shader: return "DS";
+         case reshade::api::pipeline_subobject_type::geometry_shader: return "GS";
+         case reshade::api::pipeline_subobject_type::amplification_shader: return "AS";
+         case reshade::api::pipeline_subobject_type::mesh_shader: return "MS";
+         case reshade::api::pipeline_subobject_type::pixel_shader: return "PS";
+         case reshade::api::pipeline_subobject_type::compute_shader: return "CS";
+         default: return "XS";
+         }
+      }
       // The stage the frame capture shows, "XS" if none
       const char* StageName() const
       {
@@ -196,7 +253,6 @@ namespace Shader
          if (cloned && patch_application_mode == PatchApplicationMode::Async) return Replacement::PatchAsync;
          return Replacement::None;
       }
-#endif
    };
 
    struct CachedShader
@@ -234,6 +290,22 @@ namespace Shader
       std::vector<uint8_t> live_patched_owned_data;
       const void* live_patched_data = nullptr; // Usually nullptr. Valid if we edited the byte code of the shader live when it was created (including shader debug data stripped)
       size_t live_patched_size = 0;
+
+#if DX12
+      // The registers the shader declares, read lazily by the frame capture ("D3D12Trace::ParseResourceBindings()"). The per slot
+      // reflections above have no register spaces.
+      struct ResourceBinding
+      {
+         char type = 0; // 'b', 't', 'u' or 's'
+         uint32_t index = 0;
+         uint32_t space = 0;
+         uint32_t count = 1;
+      };
+      std::vector<ResourceBinding> bindings;
+      bool parsed_bindings = false;
+      bool found_bindings = false; // If not, the capture doesn't filter by "bindings"
+      bool uses_descriptor_heap = false; // SM 6.6 "ResourceDescriptorHeap[]" or "SamplerDescriptorHeap[]", which "bindings" can't list
+#endif
 #endif
 
 #if ALLOW_SHADERS_DUMPING || DEVELOPMENT
@@ -380,41 +452,41 @@ namespace Shader
       bool Contains(const ShaderHashesList<OtherShaderHashesCount, OtherStages>& other) const
       {
          using OtherList = ShaderHashesList<OtherShaderHashesCount, OtherStages>;
+         // Whether a stage's hashes share one. A single hash (a draw's "original_shader_hashes") against a set is one lookup, not a walk of the set
+         const auto shares_hash = [](const ShaderHashesContainer<Count>& ours, const ShaderHashesContainer<OtherShaderHashesCount>& theirs)
+         {
+            if constexpr (Count == ShaderHashesCount::Single && OtherShaderHashesCount == ShaderHashesCount::Multiple)
+            {
+               return ours[0] != SHADER_HASH_NONE && ShaderHashesContains(theirs, ShaderHashesType<OtherShaderHashesCount>(ours[0]));
+            }
+            else
+            {
+               for (const ShaderHashesType<OtherShaderHashesCount> shader_hash : theirs)
+               {
+                  if (ShaderHashesContains(ours, shader_hash))
+                  {
+                     return true;
+                  }
+               }
+               return false;
+            }
+         };
          if constexpr (!IgnoreGraphics && !OtherList::IgnoreGraphics)
          {
-            for (const ShaderHashesType<OtherShaderHashesCount> shader_hash : other.pixel_shaders)
+            if (shares_hash(pixel_shaders, other.pixel_shaders) || shares_hash(vertex_shaders, other.vertex_shaders))
             {
-               if (ShaderHashesContains(pixel_shaders, shader_hash))
-               {
-                  return true;
-               }
-            }
-            for (const ShaderHashesType<OtherShaderHashesCount> shader_hash : other.vertex_shaders)
-            {
-               if (ShaderHashesContains(vertex_shaders, shader_hash))
-               {
-                  return true;
-               }
+               return true;
             }
 #if GEOMETRY_SHADER_SUPPORT
-            for (const ShaderHashesType<OtherShaderHashesCount> shader_hash : other.geometry_shaders)
+            if (shares_hash(geometry_shaders, other.geometry_shaders))
             {
-               if (ShaderHashesContains(geometry_shaders, shader_hash))
-               {
-                  return true;
-               }
+               return true;
             }
 #endif
          }
          if constexpr (!IgnoreCompute && !OtherList::IgnoreCompute)
          {
-            for (const ShaderHashesType<OtherShaderHashesCount> shader_hash : other.compute_shaders)
-            {
-               if (ShaderHashesContains(compute_shaders, shader_hash))
-               {
-                  return true;
-               }
-            }
+            return shares_hash(compute_shaders, other.compute_shaders);
          }
          return false;
       }
@@ -646,23 +718,6 @@ namespace Shader
       }
       return template_shader_name;
    }
-
-   // ============================================================================
-   // Pipeline clone helpers, defined in shaders.inl (they need the complete "CommandListData" and patch types).
-   // ============================================================================
-
-   // The stage of a shader subobject (0 if it isn't one).
-   reshade::api::shader_stage GetShaderStage(reshade::api::pipeline_subobject_type type);
-   // Records a shader injected into a clone: a custom shader file, or a patch (with its recipe reports).
-   void RecordCloneShader(CustomPipelineData& data, reshade::api::pipeline_subobject_type type,
-      const std::shared_ptr<Patch::PatchedShaderData>& patch = nullptr);
-   // What the clone of a pipeline (or the clone bound on a command list) was built from, for one shader stage.
-   CloneOrigin GetCloneOrigin(const CachedPipeline& pipeline, reshade::api::shader_stage stage);
-   CloneOrigin GetShaderOrigin(const CommandListData& cmd_list_data, reshade::api::shader_stage stage);
-   // Binds the original pipelines of "stages" or their clones, for the current draw/dispatch (callable from any draw callback):
-   // the next draw binds the clones again if it can use them. Stages without a clone (selected at bind time) are left alone.
-   // In DX11 a pipeline is a single shader, so stages switch independently.
-   void UsePipelineVariant(CommandListData& cmd_list_data, ID3D11DeviceContext* native_device_context, reshade::api::shader_stage stages, PipelineVariant variant);
 }
 
 // TODO: delete. This is useless. If anything, make a typedef of "ShaderHashesList" with a single shader per stage.

@@ -615,9 +615,16 @@ float3 SMAAGatherNeighbours(float2 texcoord,
 float2 SMAACalculatePredicatedThreshold(float2 texcoord,
                                         float4 offset[3],
                                         SMAATexture2D(predicationTex)) {
+    #if SMAA_PREDICATION_EDGENESS
+    // Luma: the predication texture is already an edge-ness of the pixel's left and top edges (the games' one-sided depth
+    // extract passes), so its value is the test: differencing it against the neighbors cancels along staircases, where the
+    // neighbor is marked too (for its other axis)
+    float2 edges = step(SMAA_PREDICATION_THRESHOLD, SMAASamplePoint(predicationTex, texcoord).rr);
+    #else
     float3 neighbours = SMAAGatherNeighbours(texcoord, offset, SMAATexturePass2D(predicationTex));
     float2 delta = abs(neighbours.xx - neighbours.yz);
     float2 edges = step(SMAA_PREDICATION_THRESHOLD, delta);
+    #endif
     return SMAA_PREDICATION_SCALE * SMAA_THRESHOLD * (1.0 - SMAA_PREDICATION_STRENGTH * edges);
 }
 
@@ -803,8 +810,13 @@ float2 SMAAColorEdgeDetectionPS(float2 texcoord,
     maxDelta = max(maxDelta.xy, delta.zw);
     float finalDelta = max(maxDelta.x, maxDelta.y);
 
+    #if SMAA_MORPHOLOGICAL_EDGE_SUPPRESSION
+    // Luma: Filmic SMAA's morphological edge suppression in place of the local contrast adaptation (see SMAA_Passes.hlsl)
+    edges.xy *= SMAAMorphologicalEdgeSuppression(texcoord, SMAATexturePass2D(colorTex), C, Cleft, Ctop, Cright, Cbottom, Cleftleft, Ctoptop, delta.xy, threshold);
+    #else
     // Local contrast adaptation:
     edges.xy *= step(finalDelta, SMAA_LOCAL_CONTRAST_ADAPTATION_FACTOR * delta.xy);
+    #endif
 
     return edges;
 }
@@ -1249,6 +1261,11 @@ float4 SMAABlendingWeightCalculationPS(float2 texcoord,
 //-----------------------------------------------------------------------------
 // Neighborhood Blending Pixel Shader (Third Pass)
 
+// Luma: the color fetch, overridable (e.g. to filter a gamma encoded colorTex in linear light by hand)
+#ifndef SMAA_NEIGHBORHOOD_SAMPLE
+#define SMAA_NEIGHBORHOOD_SAMPLE(tex, coord) SMAASampleLevelZero(tex, coord)
+#endif
+
 float4 SMAANeighborhoodBlendingPS(float2 texcoord,
                                   float4 offset,
                                   SMAATexture2D(colorTex),
@@ -1266,7 +1283,7 @@ float4 SMAANeighborhoodBlendingPS(float2 texcoord,
     // Is there any blending weight with a value greater than 0.0?
     SMAA_BRANCH
     if (dot(a, float4(1.0, 1.0, 1.0, 1.0)) < 1e-5) {
-        float4 color = SMAASampleLevelZero(colorTex, texcoord);
+        float4 color = SMAA_NEIGHBORHOOD_SAMPLE(colorTex, texcoord);
 
         #if SMAA_REPROJECTION
         float2 velocity = SMAA_DECODE_VELOCITY(SMAASampleLevelZero(velocityTex, texcoord));
@@ -1291,8 +1308,8 @@ float4 SMAANeighborhoodBlendingPS(float2 texcoord,
 
         // We exploit bilinear filtering to mix current pixel with the chosen
         // neighbor:
-        float4 color = blendingWeight.x * SMAASampleLevelZero(colorTex, blendingCoord.xy);
-        color += blendingWeight.y * SMAASampleLevelZero(colorTex, blendingCoord.zw);
+        float4 color = blendingWeight.x * SMAA_NEIGHBORHOOD_SAMPLE(colorTex, blendingCoord.xy);
+        color += blendingWeight.y * SMAA_NEIGHBORHOOD_SAMPLE(colorTex, blendingCoord.zw);
 
         #if SMAA_REPROJECTION
         // Antialias velocity for proper reprojection in a later stage:
@@ -1326,7 +1343,9 @@ float4 SMAAResolvePS(float2 texcoord,
     float4 current = SMAASamplePoint(currentColorTex, texcoord);
 
     // Reproject current coordinates and fetch previous pixel:
-    float4 previous = SMAASamplePoint(previousColorTex, texcoord + velocity);
+    // Luma: bilinear. A point fetch misplaces the previous frame by up to half a pixel under sub-pixel motion, and a bicubic one
+    // measured worse.
+    float4 previous = SMAASampleLevelZero(previousColorTex, texcoord + velocity);
 
     // Attenuate the previous pixel if the velocity is different:
     float delta = abs(current.a * current.a - previous.a * previous.a) / 5.0;

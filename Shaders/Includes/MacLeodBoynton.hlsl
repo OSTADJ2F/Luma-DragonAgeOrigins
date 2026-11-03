@@ -256,9 +256,8 @@ PurityResult SolvePurity(float3 rgb_linear, float purity_value, int purity_input
                          float curve_gamma, float2 mb_white_override, float t_min,
                          int purity_adjust_mode, float3x3 rgb_to_xyz_mat, float3x3 xyz_to_rgb_mat)
 {
-   PurityResult output;
-
-   output.purity01_in = 0.f;
+   // Zeroed, so the early return below the minimum leaves no member undefined.
+   PurityResult output = (PurityResult)0;
 
    // 1) RGB -> XYZ -> LMS
    float3 xyz = mul(rgb_to_xyz_mat, rgb_linear);
