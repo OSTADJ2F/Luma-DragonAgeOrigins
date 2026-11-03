@@ -610,7 +610,6 @@
     <ClInclude Include="dlss\DLSS.h" />
     <ClInclude Include="fsr\FSR.h" />
     <ClInclude Include="xess\XeSS.h" />
-    <ClInclude Include="taa\LumaTAA.hpp" />
     <ClInclude Include="includes\callbacks.h" />
     <ClInclude Include="includes\cbuffers.h" />
     <ClInclude Include="includes\com_ptr.h" />

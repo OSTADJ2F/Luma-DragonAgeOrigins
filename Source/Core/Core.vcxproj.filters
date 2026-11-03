@@ -93,9 +93,6 @@
     <ClInclude Include="fsr\FSR.h">
       <Filter>FSR</Filter>
     </ClInclude>
-    <ClInclude Include="taa\LumaTAA.hpp">
-      <Filter>Includes</Filter>
-    </ClInclude>
     <ClInclude Include="includes\super_resolution.h">
       <Filter>Includes</Filter>
     </ClInclude>

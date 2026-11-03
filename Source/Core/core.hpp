@@ -143,15 +143,11 @@ using NativeCommandList = ID3D11DeviceContext;
 #ifndef ENABLE_D3D12_SR
 #define ENABLE_D3D12_SR 0
 #endif // ENABLE_D3D12_SR
-// Luma's own native resolution TAA, in process on any GPU and on 32-bit (see "taa/LumaTAA.hpp")
-#ifndef ENABLE_LUMA_TAA
-#define ENABLE_LUMA_TAA 0
-#endif // ENABLE_LUMA_TAA
 // Automatically define "ENABLE_SR" if any SR tech is enabled
 #ifdef ENABLE_SR
 #undef ENABLE_SR
 #endif // ENABLE_SR
-#if (defined(ENABLE_NGX) && ENABLE_NGX) || (defined(ENABLE_FIDELITY_SK) && ENABLE_FIDELITY_SK) || ENABLE_XESS || (ENABLE_SR_BRIDGE && !defined(_WIN64)) || ENABLE_D3D12_SR || ENABLE_LUMA_TAA
+#if (defined(ENABLE_NGX) && ENABLE_NGX) || (defined(ENABLE_FIDELITY_SK) && ENABLE_FIDELITY_SK) || ENABLE_XESS || (ENABLE_SR_BRIDGE && !defined(_WIN64)) || ENABLE_D3D12_SR
 #define ENABLE_SR 1
 #else
 #define ENABLE_SR 0
@@ -218,8 +214,6 @@ using NativeCommandList = ID3D11DeviceContext;
 
 #if !DX12
 #define DX11 1
-#elif ENABLE_LUMA_TAA
-#error "Luma TAA is D3D11 only"
 #endif
 // Luma passes recorded in the middle of the game's D3D12 command lists (RCAS, SMAA, bloom, the texture copy conversion) and the viewports they scale for clones of other sizes:
 // release builds track the graphics state they replace too, to bind it again after them (see "D3D12State::RestoreGraphics()"). On for every D3D12 build, as the copy conversion and
@@ -317,7 +311,6 @@ using NativeCommandList = ID3D11DeviceContext;
 #if DX11
 #include "includes/shader_warmup.h"
 #endif
-#include "taa/LumaTAA.hpp" // see "ENABLE_LUMA_TAA"
 
 #if DX12 && defined(__d3d11_h__)
 #error "A D3D11 header reached a D3D12 build, gate its include with \"DX11\""
@@ -856,18 +849,6 @@ namespace
       { CompileTimeStringHash("Unclip LUT 1D"), { "Luma_UnclipLUT1D", reshade::api::pipeline_subobject_type::compute_shader } },
 #endif
 
-#if ENABLE_LUMA_TAA // See "LumaTAA::resolve_shader_hashes"
-         {CompileTimeStringHash("Luma TAA Low CS"), {"Luma_TAA_CS", reshade::api::pipeline_subobject_type::compute_shader, nullptr, nullptr, {{"TAA_QUALITY", "0"}}}},
-         {CompileTimeStringHash("Luma TAA Medium CS"), {"Luma_TAA_CS", reshade::api::pipeline_subobject_type::compute_shader, nullptr, nullptr, {{"TAA_QUALITY", "1"}}}},
-         {CompileTimeStringHash("Luma TAA High CS"), {"Luma_TAA_CS", reshade::api::pipeline_subobject_type::compute_shader, nullptr, nullptr, {{"TAA_QUALITY", "2"}}}},
-         {CompileTimeStringHash("Luma TAA Ultra CS"), {"Luma_TAA_CS", reshade::api::pipeline_subobject_type::compute_shader, nullptr, nullptr, {{"TAA_QUALITY", "3"}}}},
-         {CompileTimeStringHash("Luma TAA Low Upscale CS"), {"Luma_TAA_CS", reshade::api::pipeline_subobject_type::compute_shader, nullptr, nullptr, {{"TAA_QUALITY", "0"}, {"TAA_UPSCALE", "1"}}}},
-         {CompileTimeStringHash("Luma TAA Medium Upscale CS"), {"Luma_TAA_CS", reshade::api::pipeline_subobject_type::compute_shader, nullptr, nullptr, {{"TAA_QUALITY", "1"}, {"TAA_UPSCALE", "1"}}}},
-         {CompileTimeStringHash("Luma TAA High Upscale CS"), {"Luma_TAA_CS", reshade::api::pipeline_subobject_type::compute_shader, nullptr, nullptr, {{"TAA_QUALITY", "2"}, {"TAA_UPSCALE", "1"}}}},
-         {CompileTimeStringHash("Luma TAA Ultra Upscale CS"), {"Luma_TAA_CS", reshade::api::pipeline_subobject_type::compute_shader, nullptr, nullptr, {{"TAA_QUALITY", "3"}, {"TAA_UPSCALE", "1"}}}},
-         {CompileTimeStringHash("Luma TAA Shading Change Ultra CS"), {"Luma_TAA_CS", reshade::api::pipeline_subobject_type::compute_shader, nullptr, "shading_change_cs", {{"TAA_QUALITY", "3"}}}},
-         {CompileTimeStringHash("Luma TAA Shading Change CS"), {"Luma_TAA_CS", reshade::api::pipeline_subobject_type::compute_shader, nullptr, "shading_change_cs", {{"TAA_QUALITY", "1"}}}},
-#endif
 #endif // DX11
    };
 
@@ -3941,13 +3922,6 @@ namespace
             device_data.sr_implementations_instances[sr_implementation.first] = nullptr; // Create an empty element
             // We always do this, which will force the SR dll to load, but it should be fast enough to not bother users from other vendors
             sr_implementation.second->Init(device_data.sr_implementations_instances[sr_implementation.first], native_device, native_adapter.get());
-#if ENABLE_LUMA_TAA
-            // It draws with this device's Luma native shaders
-            if (sr_implementation.first == SR::Type::LumaTAA && device_data.sr_implementations_instances[sr_implementation.first])
-            {
-               static_cast<LumaTAA::TAAInstanceData*>(device_data.sr_implementations_instances[sr_implementation.first])->device_data = &device_data;
-            }
-#endif
 
             if (device_data.sr_implementations_instances[sr_implementation.first] && !device_data.sr_implementations_instances[sr_implementation.first]->is_supported)
             {
@@ -20799,9 +20773,6 @@ namespace
             case SR::UserType::FSR:
                selected_sr_user_type = "FSR";
                break;
-            case SR::UserType::LumaTAA:
-               selected_sr_user_type = "Luma TAA";
-               break;
             case SR::UserType::XeSS:
                selected_sr_user_type = "XeSS";
                break;
@@ -20856,9 +20827,6 @@ namespace
                AddComboItem("FSR", SR::UserType::FSR, SR::Type::FSR, device_data.sr_implementations_instances.contains(SR::Type::FSR));
 #if ENABLE_XESS || ENABLE_SR_BRIDGE || ENABLE_D3D12_SR // D3D12 only, or the SR bridge's helper, or the in-process D3D12 bridge
                AddComboItem("XeSS", SR::UserType::XeSS, SR::Type::XeSS, device_data.sr_implementations_instances.contains(SR::Type::XeSS));
-#endif
-#if ENABLE_LUMA_TAA // Only in games that enable it, rather than as an always disabled item
-               AddComboItem("Luma TAA", SR::UserType::LumaTAA, SR::Type::LumaTAA, device_data.sr_implementations_instances.contains(SR::Type::LumaTAA));
 #endif
                ImGui::EndCombo();
             }
@@ -20962,21 +20930,6 @@ namespace
                }
             }
 
-#if ENABLE_LUMA_TAA
-            if (sr_type == SR::Type::LumaTAA)
-            {
-               int taa_quality = LumaTAA::quality.load();
-               if (ImGui::SliderInt("Luma TAA Quality", &taa_quality, 0, int(std::size(LumaTAA::quality_names)) - 1, LumaTAA::quality_names[taa_quality], ImGuiSliderFlags_NoInput))
-               {
-                  LumaTAA::quality = taa_quality;
-                  reshade::set_config_value(runtime, NAME, "LumaTAAQuality", taa_quality);
-               }
-               if (ImGui::IsItemHovered())
-               {
-                  ImGui::SetTooltip("Low: the fastest, for weaker GPUs.\nMedium: sharper in motion, for a little more than the cost of Low.\nHigh: sharper textures and steadier in motion, but over twice as heavy as Low and uses more video memory.\nUltra: like High, with less ghosting behind moving objects; slightly heavier than High.");
-               }
-            }
-#endif
             if (sr_type != device_data.sr_type)
             {
                device_data.sr_type_selected = sr_type;
@@ -22906,9 +22859,6 @@ void Init(bool async)
    sr_implementations[SR::Type::FSR] = std::make_unique<SRBridge::Bridge>(SR::Type::FSR);
    sr_implementations[SR::Type::XeSS] = std::make_unique<SRBridge::Bridge>(SR::Type::XeSS);
 #endif
-#if ENABLE_LUMA_TAA
-   sr_implementations[SR::Type::LumaTAA] = std::make_unique<LumaTAA::TAA>();
-#endif
 #if DEVELOPMENT
    Mcp::Start();
 #if ENABLE_SR
@@ -22975,11 +22925,6 @@ void Init(bool async)
       int sr_api_i = int(SRBridge::api_setting);
       reshade::get_config_value(runtime, NAME, "SuperResolutionAPI", sr_api_i);
       SRBridge::api_setting = SRBridge::Api(std::clamp(sr_api_i, int(SRBridge::Api::D3D11), int(SRBridge::Api::D3D12)));
-#endif
-#if ENABLE_LUMA_TAA
-      int taa_quality = LumaTAA::quality.load();
-      reshade::get_config_value(runtime, NAME, "LumaTAAQuality", taa_quality);
-      LumaTAA::quality = std::clamp(taa_quality, 0, int(std::size(LumaTAA::quality_names)) - 1);
 #endif
 #if ENABLE_REFLEX
       int reflex_mode_i = int(reflex_mode);

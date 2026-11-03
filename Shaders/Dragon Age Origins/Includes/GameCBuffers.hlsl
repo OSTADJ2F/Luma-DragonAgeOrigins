@@ -3,7 +3,7 @@
 
 #ifdef __cplusplus
 // This include is needed to allow reading shader types from c++.
-#include "shader_types.h" // local copy of Source/Core/includes/shader_types.h (and matrix.h): a packaged release only has Luma/, so a repo-relative path does not resolve
+#include "../../../Source/Core/includes/shader_types.h" // __cplusplus only: the shader compiler never sees this include
 #endif
 
 // Mirrors c++ name spaces.

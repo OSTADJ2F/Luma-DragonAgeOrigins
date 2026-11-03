@@ -48,17 +48,16 @@ namespace SR
 		Auto,
 		DLSS,
 		FSR, // FSR 3 on D3D11, FSR 4 or 3.1 on D3D12
-		LumaTAA,
 		XeSS, // D3D12 only
 	};
 
 	// Put these in order of preference (most preferred first). For automatic selection.
 	enum class Type
 	{
-		DLSS,
-		FSR,
-		LumaTAA,
-		XeSS, // After the others, as the shaders' "SRType" (type + 1) values are fixed
+		DLSS = 0,
+		FSR = 1,
+		// 2 was Luma TAA, removed: the values are the shaders' "SRType" (type + 1), so XeSS keeps 3
+		XeSS = 3, // D3D12 only
 		None = -1
 	};
 
@@ -74,8 +73,6 @@ namespace SR
 			return type == Type::DLSS;
 		case SR::UserType::FSR:
 			return type == Type::FSR;
-		case SR::UserType::LumaTAA:
-			return type == Type::LumaTAA;
 		case SR::UserType::XeSS:
 			return type == Type::XeSS;
 		}
@@ -90,8 +87,6 @@ namespace SR
 			return "DLSS";
 		case Type::FSR:
 			return "FSR";
-		case Type::LumaTAA:
-			return "Luma TAA";
 		case Type::XeSS:
 			return "XeSS";
 		case Type::None:
