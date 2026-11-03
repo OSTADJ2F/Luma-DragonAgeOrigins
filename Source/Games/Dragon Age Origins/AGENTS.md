@@ -5,6 +5,21 @@ changes every session.
 
 Everything here was checked against the code on 2026-11-02 (branch `dragon-age-origins-sr`, last commit `b5d3d950`).
 
+## 0. Repository boundary (read first)
+
+This repository is the Luma framework (vendored unmodified from Hlib Omelchenko's fork at `23019de8`) plus this one
+mod. **Everything the mod owns is in `Source/Games/Dragon Age Origins`, `Shaders/Dragon Age Origins` and
+`Data/Dragon Age Origins`.** Nothing else may be edited: `Source/Core`, `Source/Tools`, `Source/External`,
+`Shaders/Includes`, `Shaders/Global`, the `Luma.*.props` files and `Scripts/` are the framework, and a change there
+makes every future framework update a conflict. `Scripts/check-mod-boundary.sh` enforces this as a `commit-msg` hook
+and rejects any commit that touches those paths unless its message starts with `Framework:` (used when vendoring an
+upstream update). See `PORT-STATUS.md` for what was removed to get here (the axed features are gone for good).
+
+Older notes below (`HANDOFF.md`, `TestScenePlan.md`, the paths in the build section) still describe the previous
+repo, `C:\Stuff\Luma`, which had every other Luma game and the framework's own history. The build commands are the
+same, with `C:\Stuff\Luma-framework-clean` as the repo root.
+
+
 ---
 
 ## 1. What the project is

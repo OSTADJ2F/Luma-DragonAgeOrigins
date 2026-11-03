@@ -126,7 +126,18 @@ What changed since §1:
   Development addon md5 `85a5839b250df10d9e1109d9fd0e2b7e`, deployed to `bin_ship` (a Publishing build
   overwrites `bin_ship` through the post-build copy, as usual — the dev one was re-copied after).
 
-Open points:
+## 8. Committed and guarded
+
+- `c7947d6d` **Framework: vendor Luma-Framework at 23019de8 (Hlib Omelchenko's fork), Dragon Age Origins only** —
+  the framework and the removal of the other 126 game folders.
+- `c6b54265` **Dragon Age Origins: HDR mod, game-local (no framework edits)** — the mod itself.
+- `d560a6e1` **Framework: add the mod boundary check** — `Scripts/check-mod-boundary.sh`, installed as
+  `.git/hooks/commit-msg`: a commit touching `Source/Core`, `Source/Tools`, `Source/External`, `Shaders/Includes`,
+  `Shaders/Global`, the `Luma.*.props/xml` files or `Scripts/` is rejected unless its message starts with
+  `Framework:`. Verified both ways (blocked without the prefix, allowed with it).
+
+## 9. Open points
+
 
 - **TAA lock luminance**: Core's shader defines are single-character (`SHADER_DEFINES_MAX_VALUE_LENGTH == 2`),
   so `TAA_LOCK_MIN_LUMINANCE` (0.45 vs the default 1.0) cannot be passed from the game. Either accept the
