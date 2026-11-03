@@ -1,5 +1,5 @@
 === SUMMARY (Nexus "About this mod" field, paste separately) ===
-Native HDR for Dragon Age: Origins (and an SDR mode), with better anti-aliasing (Luma TAA, DLSS, FSR), a new bloom, cinematic depth of field in cutscenes, ambient occlusion, film grain, a HUD sized for modern displays and more. A ReShade addon, not a preset.
+Native HDR for Dragon Age: Origins (and an SDR mode), with DLSS or FSR anti-aliasing, a new bloom, cinematic depth of field in cutscenes, ambient occlusion, film grain, a HUD sized for modern displays and more. A ReShade addon, not a preset.
 
 === DESCRIPTION (BBCode, paste into the description editor) ===
 
@@ -15,7 +15,7 @@ Native HDR for Dragon Age: Origins (and an SDR mode), with better anti-aliasing 
 [*][b]Real HDR[/b] for a game that only ever had standard (SDR) output, with Paper White and Peak White settings for your display.
 [*][b]Works in SDR too:[/b] with HDR off in Windows the mod outputs real SDR, and the anti-aliasing, bloom, ambient occlusion, depth of field and film grain still work.
 [*][b]Bright things look bright:[/b] skies, the sun, fire and magic keep their detail and colour instead of washing out to flat white, and the brightest parts use your display's full brightness. The highlights adapt to your Peak White and Paper White by themselves.
-[*][b]Better anti-aliasing:[/b] choose [b]Luma TAA[/b] (any graphics card), [b]DLSS[/b] (NVIDIA RTX) or [b]FSR[/b] instead of the game's MSAA, for smoother edges and a steadier image in motion.
+[*][b]Better anti-aliasing:[/b] choose [b]DLSS[/b] (NVIDIA RTX) or [b]FSR[/b] (any graphics card) instead of the game's MSAA, for cleaner edges and a steadier image in motion.
 [*][b]New bloom:[/b] a softer, wider glow around bright lights, or keep the game's own bloom, or turn bloom off.
 [*][b]Cinematic depth of field[/b] in cutscenes: out of focus areas blur into soft discs and bright lights turn into bokeh.
 [*][b]Ambient occlusion:[/b] soft shadowing in corners, creases and where objects meet, which the game never had. Choose [b]XeGTAO[/b] (crisp) or [b]GT-VBAO[/b] (softer).
@@ -26,8 +26,8 @@ Native HDR for Dragon Age: Origins (and an SDR mode), with better anti-aliasing 
 [*][b]Natural highlights:[/b] the very brightest lights fade towards white, like on film, instead of staying a vivid colour.
 [*][b]Richer colours:[/b] the game's colours use the wider range of an HDR display.
 [*][b]HDR for the movies:[/b] a light brightness boost for the pre-rendered videos.
-[*][b]Sharper textures:[/b] 16x anisotropic filtering.
-[*][b]Smoother edges:[/b] optional SMAA on top of the game's MSAA, and a sharpening slider for the upscalers.
+[*][b]Sharper textures:[/b] 16x anisotropic filtering, always on.
+[*][b]Sharpening:[/b] a slider for the upscalers, off by default.
 [*][b]Colour controls:[/b] Exposure, Contrast, Saturation and Temperature sliders.
 [*][b]Lens effects:[/b] an optional vignette (with a radius slider) that darkens the corners of the scene and not the HUD, and chromatic aberration for a slight film-like fringe towards the edges.
 [*][b]Hide the HUD[/b] for clean screenshots.
@@ -38,9 +38,9 @@ Native HDR for Dragon Age: Origins (and an SDR mode), with better anti-aliasing 
 [list]
 [*]For HDR: an HDR display with HDR turned on in Windows. With HDR off the mod runs in SDR. It picks the mode when the game starts: restart the game after turning Windows HDR on or off.
 [*][b]Frame Buffer Effects turned on[/b] in the game's video settings. The mod does not work without it.
-[*]For [b]Luma TAA, DLSS or FSR: MSAA turned off[/b] in the game's video settings.
-[*]To use the game's MSAA with SMAA instead: MSAA turned on. Ambient occlusion and bloom work either way.
-[*]DLSS needs an NVIDIA RTX graphics card. Luma TAA works on any card.
+[*]For [b]DLSS or FSR: MSAA turned off[/b] in the game's video settings. Ambient occlusion and bloom work either way.
+[*]DLSS needs an NVIDIA RTX graphics card. FSR runs on any graphics card.
+[*]TAA and SMAA (the mod's own temporal anti-aliasing and the old SMAA path) and XeSS are not part of this release.
 [/list]
 
 [size=4][b]Installation[/b][/size]
@@ -54,8 +54,8 @@ Keep all the included files together in that folder, and do not swap in a differ
 [size=4][b]Settings (Luma tab)[/b][/size]
 [list]
 [*][b]Scene Paper White[/b] (102 by default) and [b]UI Paper White[/b] (203 by default): how bright the game and the HUD are.
-[*][b]Peak White[/b]: your display's peak brightness, up to 1000 nits (a display that reports more is set to 1000).
-[*][b]Super Resolution:[/b] None, Auto, DLSS, FSR or Luma TAA. A tick appears when it is running. With FSR you can choose FSR 4 (newest, experimental on non-AMD cards) or FSR 3.1 (works on any card, the safer choice).
+[*][b]Peak White[/b]: your display's peak brightness, as Windows reports it.
+[*][b]Super Resolution:[/b] None, Auto, DLSS or FSR. A tick appears when it is running. DLSS and FSR can run through Direct3D 11 or 12 (the D3D12 path gives FSR 4 on the newest AMD cards, FSR 3.1 everywhere else); DLSS and FSR 3 look the same either way.
 [*][b]Highlight Desaturation[/b] (0, HDR only): how much the brightest lights fade towards white. 0 keeps their colour.
 [*][b]Exposure, Contrast, Saturation, Temperature:[/b] the usual colour sliders, neutral by default.
 [*][b]Bloom[/b] (Luma): Off, Game (the game's own bloom) or Luma (a wider, softer bloom), and [b]Bloom Intensity[/b] (1.0, for Luma). For Game and Luma keep the game's own Bloom option turned on.
@@ -63,8 +63,7 @@ Keep all the included files together in that folder, and do not swap in a differ
 [*][b]Vignette[/b] (off) with [b]Vignette Radius[/b], and [b]Chromatic Aberration[/b] (off): the lens effects, both off by default.
 [*][b]Bokeh Depth of Field[/b] (on): turn it off for the game's own blur.
 [*][b]Video AutoHDR[/b] (on) and [b]Video HDR Boost[/b] (0.5, HDR only): the brightness boost for the movies.
-[*][b]SMAA[/b] (on, only with the game's MSAA) and [b]RCAS Sharpness[/b] (0.25, for the upscalers, 0 is off).
-[*][b]Anisotropic Filtering[/b] (16x): restart the game to apply a change.
+[*][b]RCAS Sharpness[/b] (0.25, for the upscalers, 0 is off).
 [*][b]HUD Scale[/b] (Auto): 0 (Auto) is the size the HUD has at 768 lines, 1.0 is the game's own size, higher is bigger. The menus, the character sheet, the mouse and every click target follow it. It applies the next time the game lays its interface out (change screen, or restart to be sure).
 [*][b]Hide Gameplay UI[/b] (off, not saved): hides the HUD for clean screenshots.
 [*][b]Ambient Occlusion[/b] (on) and [b]AO Technique[/b] (GT-VBAO by default, or XeGTAO).
@@ -74,7 +73,7 @@ Keep all the included files together in that folder, and do not swap in a differ
 [b]Nothing seems to happen.[/b] Check that Frame Buffer Effects is on in the game's video settings, and for HDR that HDR is on in Windows (then restart the game).
 [b]There are no Paper White or Peak White settings.[/b] The mod is in SDR because Windows HDR was off when the game started. Turn it on and restart the game.
 [b]Bloom Off, Game and Luma look almost the same in SDR.[/b] The game's bloom lands mostly on areas that are already white in SDR. The difference shows in HDR.
-[b]Luma TAA, DLSS or FSR shows no tick.[/b] Turn MSAA off in the game's video settings and make sure all the included files are in the bin_ship folder. It can take a few seconds after you pick DLSS or FSR.
+[b]DLSS or FSR is greyed out, or shows no tick.[/b] Turn MSAA off in the game's video settings, and make sure [b]Luma-Upscaler.exe[/b] (the small helper the mod starts for DLSS and FSR) is in the bin_ship folder: some antivirus tools remove it. It can take a few seconds after you pick DLSS or FSR.
 [b]The highlights look limited.[/b] Peak White should match your display's real peak brightness, and be higher than Paper White.
 [b]The HUD is too bright or too dim.[/b] Adjust UI Paper White.
 [b]The HUD is bigger than it used to be.[/b] That is [b]HUD Scale[/b] on [b]Auto[/b] (the default): the game's interface was drawn for 1024x768, so it stays small on a 1080p or 1440p screen. Set HUD Scale to 1.0 for the game's own size.
@@ -86,8 +85,7 @@ Keep all the included files together in that folder, and do not swap in a differ
 [size=4][b]Known issues[/b][/size]
 [list]
 [*]Early release, limited testing: report crashes, wrong colours, ghosting or flickering.
-[*]DLSS, FSR and Luma TAA smooth the image at the game's own resolution (they do not upscale it).
-[*]Very small props can occasionally smear in motion with Luma TAA.
+[*]DLSS and FSR smooth the image at the game's own resolution (they do not upscale it).
 [*]Only tested at 2560x1440, in HDR and SDR.
 [/list]
 
@@ -97,10 +95,9 @@ Keep all the included files together in that folder, and do not swap in a differ
 [size=4][b]Credits[/b][/size]
 [list]
 [*]Luma for Dragon Age: Origins by [b]Ostad Gaming[/b].
-[*]The [b]Luma[/b] framework by Pumbo and the Luma team. [b]Luma TAA[/b] and the DLSS and FSR support come from Hlib Omelchenko's Luma branch, and the integration follows the Metal Gear Rising: Revengeance mod (DristoforColumb).
+[*]The [b]Luma[/b] framework by Pumbo and the Luma team. The DLSS and FSR support and the motion vectors it runs on come from Hlib Omelchenko's Luma branch, and the integration follows the Metal Gear Rising: Revengeance mod (DristoforColumb).
 [*][b]dgVoodoo2[/b] by Dege.
 [*][b]ReShade[/b] and its add-on API by crosire.
 [*][b]DLSS[/b] by NVIDIA, [b]FidelityFX[/b] by AMD.
-[*][b]SMAA[/b] by Jorge Jimenez et al.
 [*][b]XeGTAO[/b] by Intel and [b]GT-VBAO[/b] by Mirko Salm (TinyTexel).
 [/list]
