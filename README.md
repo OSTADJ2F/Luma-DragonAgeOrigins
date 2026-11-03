@@ -33,7 +33,7 @@ anisotropic filtering, the 1000 nit peak cap, and the FSR version choice.
   breaks every shader replacement.
 - **ReShade 6.8+ with add-on support** (`dxgi.dll`).
 - Windows 10/11, an HDR display for HDR output. On an SDR display the mod runs in SDR (decided at game start).
-- DLSS/FSR need `Luma-Upscaler.exe` next to the game's exe (it ships in the release zip).
+- DLSS/FSR need `Luma-Upscaler.dll` next to the game's exe (it ships in the release zip; Windows' rundll32 runs it, so the package has no exe).
 
 ## Build
 
@@ -43,7 +43,7 @@ The framework is compiled into the add-on by the game's project (it includes `So
 MSBuild "Source/Games/Dragon Age Origins/Dragon Age Origins.vcxproj" -p:Configuration=Development-Release ^
   -p:Platform=Win32 "-p:SolutionDir=<repo>\\" -p:SolutionName=Luma -m
 
-MSBuild "Source/Tools/SR Bridge Helper/SR Bridge Helper.vcxproj" -p:Configuration=Publishing-Release ^
+MSBuild "Source/Tools/SR Bridge Helper/SR Bridge Helper DLL.vcxproj" -p:Configuration=Publishing-Release ^
   -p:Platform=x64 "-p:SolutionDir=<repo>\\" -m
 ```
 

@@ -5,7 +5,7 @@
 # zips the result with a dated name:
 #
 #   d3d9.dll + dgVoodoo.conf   dgVoodoo2 2.87.6 (the shader hashes are tied to this version)
-#   Luma-Upscaler.exe          the x64 DLSS/FSR helper (Core launches it by that exact name)
+#   Luma-Upscaler.dll          the x64 DLSS/FSR helper, run by Windows' own rundll32 (Core launches it that way)
 #   nvngx_dlss.dll             DLSS, loaded by the helper
 #   amd_fidelityfx_*.dll       FSR, loaded by the helper
 #
@@ -50,10 +50,10 @@ try {
     Copy-Item $d3d9 -Destination (Join-Path $pkg "d3d9.dll") -Force
     Copy-Item (Join-Path $repoRoot "Data\$project\dgVoodoo.conf") -Destination (Join-Path $pkg "dgVoodoo.conf") -Force
 
-    # The x64 helpers: the SR bridge and the two upscaler libraries it loads
-    $helper = Join-Path $repoRoot "Binaries\Win32-$Config\Luma-Upscaler.exe"
-    if (-not (Test-Path $helper)) { throw "Luma-Upscaler.exe not built (build Source\Tools\SR Bridge Helper, x64)" }
-    Copy-Item $helper -Destination (Join-Path $pkg "Luma-Upscaler.exe") -Force
+    # The x64 helper (a dll run through rundll32, so the zip carries no exe) and the two upscaler libraries it loads
+    $helper = Join-Path $repoRoot "Binaries\Win32-$Config\Luma-Upscaler.dll"
+    if (-not (Test-Path $helper)) { throw "Luma-Upscaler.dll not built (build Source\Tools\SR Bridge Helper DLL, x64)" }
+    Copy-Item $helper -Destination (Join-Path $pkg "Luma-Upscaler.dll") -Force
     Copy-Item (Join-Path $repoRoot "Source\External\NGX\bin\rel\nvngx_dlss.dll") -Destination $pkg -Force
     Copy-Item (Join-Path $repoRoot "Source\External\FidelityFX-API\signedbin\amd_fidelityfx_loader_dx12.dll") -Destination $pkg -Force
     Copy-Item (Join-Path $repoRoot "Source\External\FidelityFX-API\signedbin\amd_fidelityfx_upscaler_dx12.dll") -Destination $pkg -Force
@@ -66,6 +66,9 @@ try {
         $_.Name -in @("ReShade.ini", "ReShadePreset.ini")
     }
     if ($bad) { throw ("refusing to ship development leftovers: " + (($bad | ForEach-Object { $_.Name }) -join ", ")) }
+    # Nexus forbids executables in a release zip
+    $exe = Get-ChildItem $pkg -Recurse -File -Filter "*.exe"
+    if ($exe) { throw ("refusing to ship executables: " + (($exe | ForEach-Object { $_.Name }) -join ", ")) }
 
     # 4. Zip
     $name = "Luma-Dragon_Age_Origins-x32.{0}.zip" -f (Get-Date -Format "yyyy-MM-dd-HHmm")

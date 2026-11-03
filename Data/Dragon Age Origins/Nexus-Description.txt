@@ -73,7 +73,7 @@ Keep all the included files together in that folder, and do not swap in a differ
 [b]Nothing seems to happen.[/b] Check that Frame Buffer Effects is on in the game's video settings, and for HDR that HDR is on in Windows (then restart the game).
 [b]There are no Paper White or Peak White settings.[/b] The mod is in SDR because Windows HDR was off when the game started. Turn it on and restart the game.
 [b]Bloom Off, Game and Luma look almost the same in SDR.[/b] The game's bloom lands mostly on areas that are already white in SDR. The difference shows in HDR.
-[b]DLSS or FSR is greyed out, or shows no tick.[/b] Turn MSAA off in the game's video settings, and make sure [b]Luma-Upscaler.exe[/b] (the small helper the mod starts for DLSS and FSR) is in the bin_ship folder: some antivirus tools remove it. It can take a few seconds after you pick DLSS or FSR.
+[b]DLSS or FSR is greyed out, or shows no tick.[/b] Turn MSAA off in the game's video settings, and make sure [b]Luma-Upscaler.dll[/b] (the small helper the mod starts for DLSS and FSR) is in the bin_ship folder: some antivirus tools remove it. It can take a few seconds after you pick DLSS or FSR.
 [b]The highlights look limited.[/b] Peak White should match your display's real peak brightness, and be higher than Paper White.
 [b]The HUD is too bright or too dim.[/b] Adjust UI Paper White.
 [b]The HUD is bigger than it used to be.[/b] That is [b]HUD Scale[/b] on [b]Auto[/b] (the default): the game's interface was drawn for 1024x768, so it stays small on a 1080p or 1440p screen. Set HUD Scale to 1.0 for the game's own size.

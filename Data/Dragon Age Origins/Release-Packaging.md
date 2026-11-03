@@ -9,19 +9,19 @@ Build two things, with the solution dir passed (a development build bakes its sh
 MSBuild "Source\Games\Dragon Age Origins\Dragon Age Origins.vcxproj" -p:Configuration=Publishing-Release ^
   -p:Platform=Win32 "-p:SolutionDir=<repo>\\" -p:SolutionName=Luma -m
 
-MSBuild "Source\Tools\SR Bridge Helper\SR Bridge Helper.vcxproj" -p:Configuration=Publishing-Release ^
+MSBuild "Source\Tools\SR Bridge Helper\SR Bridge Helper DLL.vcxproj" -p:Configuration=Publishing-Release ^
   -p:Platform=x64 "-p:SolutionDir=<repo>\\" -m
 ```
 
-The addon lands in `Binaries\Win32-Publishing-Release`, the x64 helper next to it as `Luma-Upscaler.exe`.
+The addon lands in `Binaries\Win32-Publishing-Release`, the x64 helper next to it as `Luma-Upscaler.dll`.
 
 ## Package
 ```
 powershell -NoProfile -ExecutionPolicy Bypass -File "Data\Dragon Age Origins\package-release.ps1" -OutDir "C:\Stuff\Luma-DAO-release"
 ```
-It runs the framework's `Scripts\package.ps1` (addon, the `Luma/` shader mounts, ReShade as `dxgi.dll`,
-`d3dcompiler_47_x32.dll`), then adds the mod's runtime files, refuses to zip development leftovers, and writes
-`Luma-Dragon_Age_Origins-x32.<yyyy-MM-dd-HHmm>.zip`.
+It runs the framework's `Scripts\package.ps1` (the addon, the `Luma/` shader mounts, ReShade as `dxgi.dll`,
+`d3dcompiler_47_x32.dll`), then adds the mod's runtime files, refuses development leftovers and **refuses any `.exe`**,
+and writes `Luma-Dragon_Age_Origins-x32.<yyyy-MM-dd-HHmm>.zip`.
 
 ## Zip contents (root)
 - `Luma-Dragon Age Origins.addon`
@@ -34,20 +34,22 @@ It runs the framework's `Scripts\package.ps1` (addon, the `Luma/` shader mounts,
   sit next to the helper.
 - `amd_fidelityfx_loader_dx12.dll`, `amd_fidelityfx_upscaler_dx12.dll` - FSR, from
   `Source/External/FidelityFX-API/signedbin/`, plus `Licenses/FidelityFX_LICENSE.md`.
-- `Luma-Upscaler.exe` - the **x64** SR helper. Core looks for exactly this name (`kHelperName`). It is the one
-  executable in the zip and it is required: without it DLSS and FSR stay greyed out.
+- `Luma-Upscaler.dll` - the **x64** SR helper. Core runs it through Windows' own `rundll32`
+  (`rundll32 "Luma-Upscaler.dll",LumaUpscaler`), which is why the package needs no executable. It is required:
+  without it DLSS and FSR stay greyed out.
 - `Luma/` - the shader mounts (`Global`, `Includes`, `Dragon Age Origins`) and `d3dcompiler_47_x32.dll`.
 
 ## Never in the zip
-- `dgVoodooCpl.exe` (the control panel), or any executable other than `Luma-Upscaler.exe`.
+- **NO executables at all**: no `dgVoodooCpl.exe`, no `Luma-Upscaler.exe`, no `.exe` anywhere. Dlls are fine, and the
+  helper is a dll precisely for this rule.
 - Development leftovers: `Dump` folders, compiled `.cso`, `.bak`/`.prev` addons, `.pdb`/`.exp`/`.lib`, logs.
 - `ReShade.ini`, `ReShadePreset.ini` or any other user config: users get ReShade defaults.
-- XeSS is deprecated (`ENABLE_SR_BRIDGE_XESS 0` in `main.cpp`): no XeSS option, no `libxess.dll`.
+- XeSS is not in this build (`ENABLE_XESS 0`, no `libxess.dll`): no XeSS option, no `libxess.dll` in the zip.
 
 ## Deploying to the local game (`C:\Games\Dragon Age Origins\bin_ship`)
-- Dev builds: copy only the addon and `Luma-Upscaler.exe`. A development build loads shaders from the repository
+- Dev builds: copy only the addon and `Luma-Upscaler.dll`. A development build loads shaders from the repository
   path baked in at build time, so the `Luma/` folder is not needed.
-- Release builds: copy the addon, `Luma-Upscaler.exe` and the `Luma/` folder.
+- Release builds: copy the addon, `Luma-Upscaler.dll` and the `Luma/` folder.
 - Never overwrite the user's `dgVoodoo.conf`, `ReShade.ini`, `ReShadePreset.ini` or their dlls.
 - Dev files moved out of the game folder live in `C:\Stuff\Luma-DAO-dev-backup`.
 

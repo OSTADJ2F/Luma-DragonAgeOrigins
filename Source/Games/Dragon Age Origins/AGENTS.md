@@ -48,7 +48,7 @@ What the mod adds (all shipped in the current release unless marked):
 | Light Source Boost (brighter cores of fire/magic sprites, sky sun) | `Particle_0x5DE6B6F6`, `VFXAlpha_0x41DE4D45`, `VFXVolume_0x0A2ABD19`, `Sky_0x1A13F3EF` |
 | Bloom: Off / Game / Luma pyramid bloom | `OnDrawOrDispatch` bloom block, `Luma_Bloom_impl.hlsl` |
 | Ambient occlusion (XeGTAO or GT-VBAO, the game has none) | `RunXeGTAO()`, `Luma_DAO_XeGTAO.hlsl`, `Luma_DAO_AOApply.hlsl`, `Luma_DAO_DepthLinearize.hlsl` |
-| Upscalers / AA: DLSS, FSR (both run in a 64-bit helper, `Luma-Upscaler.exe`, "SR bridge"; Luma TAA was removed, see PORT-STATUS §12) | `DrawUpscaler()`, `FillMotionVectors()`, `MotionVectorPatches.h`, Core `scene_motion_vectors.h` |
+| Upscalers / AA: DLSS, FSR (both run in a 64-bit helper, `Luma-Upscaler.dll` through rundll32, "SR bridge"; Luma TAA was removed, see PORT-STATUS §12) | `DrawUpscaler()`, `FillMotionVectors()`, `MotionVectorPatches.h`, Core `scene_motion_vectors.h` |
 | SMAA on top of the game's 8x MSAA, HDR-aware MSAA resolve | `OverrideResolveTextureRegion()`, `ResolveAndSMAA()`, `Luma_SMAA_impl.hlsl`, `Luma_DAO_ResolveMSAA.hlsl` |
 | RCAS sharpening after the upscaler | `DrawUpscaler()` |
 | Cutscene bokeh depth of field | `DoFComposite_0xB507EFCE.ps_5_0.hlsl`, `BindDoFScene()` |
@@ -297,6 +297,6 @@ blocks, greyed out when `cb_luma_global_settings.DisplayMode == DisplayModeType:
   highlights off to the display peak). Named after the author.
 - **Paper white**: the brightness of "SDR white" in nits. Scene default 102, UI default 203.
 - **Canvas**: dgVoodoo's 8-bit backbuffer surface that the grade, HUD and movies draw on (upgraded by Luma).
-- **SR**: super resolution (DLSS/FSR). **SR bridge**: the 64-bit helper (`Luma-Upscaler.exe`) that runs DLSS/FSR.
+- **SR**: super resolution (DLSS/FSR). **SR bridge**: the 64-bit helper (`Luma-Upscaler.dll`, run by rundll32) that runs DLSS/FSR.
 - **Hash**: the 32-bit shader hash Luma uses (`0x6B504D9F`), in file names and traces.
 - **MCP**: the Luma live-inspection tool server (`Scripts/luma_mcp.py`).
